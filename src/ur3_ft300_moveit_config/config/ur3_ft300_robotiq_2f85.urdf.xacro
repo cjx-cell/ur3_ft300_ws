@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur3_ft300_robotiq_2f85">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import ur3_ft300_robotiq_2f85 urdf file -->
+    <xacro:include filename="$(find ur_simulation_gz)/urdf/ur3_ft300_robotiq_2f85.urdf.xacro" />
+
+    <!-- Virtual link at fingertip midpoint (for interactive marker placement) -->
+    <link name="gripper_tip"/>
+    <joint name="gripper_tip_joint" type="fixed">
+      <parent link="wrist_3_link"/>
+      <child link="gripper_tip"/>
+      <origin xyz="0 0 0.21" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="ur3_ft300_robotiq_2f85.ros2_control.xacro" />
+
+
+    <xacro:ur3_ft300_robotiq_2f85_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

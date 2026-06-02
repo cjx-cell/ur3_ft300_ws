@@ -1,0 +1,59 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz (CORRECTED: 100Hz is optimal for Gazebo simulation)
+
+    # UR Arm Controllers
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # FT Sensor Broadcaster
+    force_torque_sensor_broadcaster:
+      type: force_torque_sensor_broadcaster/ForceTorqueSensorBroadcaster
+
+
+# Unified controller: 7 joints (6 arm + left_knuckle). Mimic joints handled by gz_ros2_control mimic params.
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+      - robotiq_85_left_knuckle_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: true
+    gains:
+      shoulder_pan_joint: {p: 100.0, i: 0.0, d: 5.0, ff_velocity_scale: 1.0}
+      shoulder_lift_joint: {p: 100.0, i: 0.0, d: 5.0, ff_velocity_scale: 1.0}
+      elbow_joint: {p: 100.0, i: 0.0, d: 5.0, ff_velocity_scale: 1.0}
+      wrist_1_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
+      wrist_2_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
+      wrist_3_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
+      robotiq_85_left_knuckle_joint: {p: 10.0, i: 0.0, d: 0.5, ff_velocity_scale: 1.0}
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 2.0
+      shoulder_pan_joint: { trajectory: 1.0, goal: 0.05 }
+      shoulder_lift_joint: { trajectory: 1.0, goal: 0.05 }
+      elbow_joint: { trajectory: 1.0, goal: 0.05 }
+      wrist_1_joint: { trajectory: 1.0, goal: 0.05 }
+      wrist_2_joint: { trajectory: 1.0, goal: 0.05 }
+      wrist_3_joint: { trajectory: 1.0, goal: 0.05 }
+      robotiq_85_left_knuckle_joint: { trajectory: 1.0, goal: 0.01 }
+
+# FT Sensor Broadcaster Configuration
+force_torque_sensor_broadcaster:
+  ros__parameters:
+    frame_id: robotiq_ft_frame_id
+    sensor_name: robotiq_ft300_sensor

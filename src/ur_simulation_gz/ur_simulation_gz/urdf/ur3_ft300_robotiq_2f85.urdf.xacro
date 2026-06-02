@@ -1,0 +1,280 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur3_ft300_robotiq_2f85">
+  <!--
+    Integrated URDF for UR3 + FT300 + Robotiq 2F85 gripper + Realsense cameras
+    For ROS2 Humble + Gazebo Fortress
+
+    Kinematic chain:
+      world -> base_link -> ... -> wrist_3_link -> tool0
+      tool0 -> ft300_mounting_plate -> ft300_sensor -> robotiq_ft_frame_id
+      robotiq_ft_frame_id -> robotiq_85_base_link -> ... gripper links
+  -->
+
+  <!-- Import main macros from each package -->
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
+  <xacro:include filename="$(find robotiq_ft_sensor_description)/urdf/robotiq_ft300.urdf.xacro"/>
+  <xacro:include filename="$(find robotiq_ft_sensor_description)/urdf/robotiq_fts.ros2_control.xacro"/>
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
+  <xacro:include filename="$(find realsense2_description)/urdf/_d415.urdf.xacro"/>
+
+  <!-- Parameters -->
+  <xacro:arg name="name" default="ur3_with_gripper"/>
+  <xacro:arg name="ur_type" default="ur3"/>
+  <xacro:arg name="tf_prefix" default=""/>
+
+  <!-- UR-specific parameters -->
+  <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/ur3/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params" default="$(find ur_description)/config/ur3/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params" default="$(find ur_description)/config/ur3/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params" default="$(find ur_description)/config/ur3/visual_parameters.yaml"/>
+  <xacro:arg name="transmission_hw_interface" default=""/>
+  <xacro:arg name="safety_limits" default="true"/>
+  <xacro:arg name="safety_pos_margin" default="0.15"/>
+  <xacro:arg name="safety_k_position" default="20"/>
+
+  <!-- Simulation parameters -->
+  <xacro:arg name="use_fake_hardware" default="true"/>
+  <xacro:arg name="fake_sensor_commands" default="false"/>
+  <xacro:arg name="sim_ignition" default="false"/>
+
+  <!-- Robotiq gripper parameters -->
+  <xacro:arg name="gripper_use_fake_hardware" default="true"/>
+
+  <!-- FT Sensor parameters -->
+  <xacro:arg name="ft_sensor_use_fake_mode" default="true"/>
+
+  <!-- Convert to properties for use in conditions -->
+  <xacro:property name="is_sim_ignition" value="$(arg sim_ignition)"/>
+
+  <!-- World link -->
+  <link name="world" />
+
+  <!-- ================================================================ -->
+  <!-- UR3 Robot Arm (parent link: world) -->
+  <!-- Generates its own ros2_control tag with gz_ros2_control/IgnitionSystem -->
+  <!-- ================================================================ -->
+  <xacro:ur_robot
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    parent="world"
+    joint_limits_parameters_file="$(arg joint_limit_params)"
+    kinematics_parameters_file="$(arg kinematics_params)"
+    physical_parameters_file="$(arg physical_params)"
+    visual_parameters_file="$(arg visual_params)"
+    transmission_hw_interface="$(arg transmission_hw_interface)"
+    safety_limits="$(arg safety_limits)"
+    safety_pos_margin="$(arg safety_pos_margin)"
+    safety_k_position="$(arg safety_k_position)"
+    use_fake_hardware="$(arg use_fake_hardware)"
+    fake_sensor_commands="$(arg fake_sensor_commands)"
+    sim_gazebo="false"
+    sim_ignition="$(arg sim_ignition)"
+    generate_ros2_control_tag="false">
+    <origin xyz="0 0 0.76" rpy="0 0 0"/>
+  </xacro:ur_robot>
+
+  <!-- ================================================================ -->
+  <!-- Robotiq FT300 Force/Torque Sensor (between tool0 and gripper) -->
+  <!-- ================================================================ -->
+  <xacro:robotiq_ft300 parent="tool0" tf_prefix="$(arg tf_prefix)">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:robotiq_ft300>
+
+  <!-- ================================================================ -->
+  <!-- Robotiq 2F85 Gripper (attached to FT sensor output frame) -->
+  <!-- ================================================================ -->
+  <xacro:robotiq_gripper
+    name="RobotiqGripper"
+    prefix="$(arg tf_prefix)"
+    parent="$(arg tf_prefix)robotiq_ft_frame_id"
+    use_fake_hardware="$(arg gripper_use_fake_hardware)"
+    sim_gazebo="false"
+    include_ros2_control="false">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:robotiq_gripper>
+
+  <!-- ================================================================ -->
+  <!-- Realsense D435i Camera (wrist-mounted) -->
+  <!-- ================================================================ -->
+  <xacro:sensor_d435i parent="$(arg tf_prefix)wrist_3_link" name="wrist_camera" use_nominal_extrinsics="true">
+    <origin xyz="0.08 0 0" rpy="0 -${pi/3} ${pi}"/>
+  </xacro:sensor_d435i>
+
+  <!-- ================================================================ -->
+  <!-- Realsense D415 Camera (global/scene camera) -->
+  <!-- ================================================================ -->
+  <link name="global_camera_mount"/>
+  <joint name="global_camera_mount_joint" type="fixed">
+    <origin xyz="0 0.35 2.06" rpy="0 ${pi/2} 0"/>
+    <parent link="world"/>
+    <child link="global_camera_mount"/>
+  </joint>
+
+  <xacro:sensor_d415 parent="global_camera_mount" name="global_camera" use_nominal_extrinsics="true">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:sensor_d415>
+
+  <!-- ================================================================ -->
+  <!-- Gazebo Camera Sensors (RGB only) -->
+  <!-- ================================================================ -->
+
+  <!-- D435i wrist camera -->
+  <gazebo reference="wrist_camera_link">
+    <sensor type="camera" name="wrist_camera_sensor">
+      <always_on>1</always_on>
+      <update_rate>30</update_rate>
+      <pose>0 0.015 0 0 0 0</pose>
+      <camera>
+        <horizontal_fov>1.210</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- D415 global/scene camera -->
+  <gazebo reference="global_camera_link">
+    <sensor type="camera" name="global_camera_sensor">
+      <always_on>1</always_on>
+      <update_rate>30</update_rate>
+      <pose>0 0.015 0 0 0 0</pose>
+      <camera>
+        <horizontal_fov>1.134</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ================================================================ -->
+  <!-- MANUALLY ADDED gz_ros2_control TAG (FIXES UR MACRO BUG) -->
+  <!-- This is the ONLY way to make it work in ROS2 Humble + Gazebo Fortress -->
+  <!-- ================================================================ -->
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+
+    <joint name="shoulder_pan_joint">
+      <param name="position_proportional_gain">5.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="shoulder_lift_joint">
+      <param name="position_proportional_gain">5.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">-1.5707</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="elbow_joint">
+      <param name="position_proportional_gain">5.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wrist_1_joint">
+      <param name="position_proportional_gain">3.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wrist_2_joint">
+      <param name="position_proportional_gain">3.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wrist_3_joint">
+      <param name="position_proportional_gain">3.0</param>
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="robotiq_85_left_knuckle_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="robotiq_85_right_knuckle_joint">
+      <param name="mimic">robotiq_85_left_knuckle_joint</param>
+      <param name="multiplier">-1</param>
+    </joint>
+    <joint name="robotiq_85_left_inner_knuckle_joint">
+      <param name="mimic">robotiq_85_left_knuckle_joint</param>
+      <param name="multiplier">1</param>
+    </joint>
+    <joint name="robotiq_85_right_inner_knuckle_joint">
+      <param name="mimic">robotiq_85_left_knuckle_joint</param>
+      <param name="multiplier">-1</param>
+    </joint>
+    <joint name="robotiq_85_left_finger_tip_joint">
+      <param name="mimic">robotiq_85_left_knuckle_joint</param>
+      <param name="multiplier">-1</param>
+    </joint>
+    <joint name="robotiq_85_right_finger_tip_joint">
+      <param name="mimic">robotiq_85_left_knuckle_joint</param>
+      <param name="multiplier">1</param>
+    </joint>
+    <sensor name="robotiq_ft300_sensor">
+      <state_interface name="force.x"/>
+      <state_interface name="force.y"/>
+      <state_interface name="force.z"/>
+      <state_interface name="torque.x"/>
+      <state_interface name="torque.y"/>
+      <state_interface name="torque.z"/>
+    </sensor>
+  </ros2_control>
+
+  <!-- FT300 Force/Torque Sensor (Gazebo-native sensor on the fixed joint) -->
+  <gazebo reference="ft300_fix">
+    <preserveFixedJoint>true</preserveFixedJoint>
+    <sensor name="robotiq_ft300_sensor" type="force_torque">
+      <update_rate>100.0</update_rate>
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <topic>robotiq_ft300_sensor</topic>
+      <force_torque>
+        <frame>child</frame>
+        <measure_direction>child_to_parent</measure_direction>
+      </force_torque>
+    </sensor>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz_ros2_control-system"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find ur_simulation_gz)/config/ur3_ft300_robotiq_controllers.yaml</parameters>
+      <controller_manager_name>controller_manager</controller_manager_name>
+    </plugin>
+  </gazebo>
+</robot>
+
