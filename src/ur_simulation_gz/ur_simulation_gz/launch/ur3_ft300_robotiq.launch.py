@@ -182,13 +182,29 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
-    # Camera image bridge
-    gz_image_bridge = Node(
-        package="ros_gz_image",
-        executable="image_bridge",
+    # Camera bridges (Gazebo → ROS 2)
+    gz_wrist_camera_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
         arguments=[
-            "/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image",
-            "/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image",
+            "/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+        ],
+        remappings=[
+            ("/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image",
+             "/wrist_camera/color/image_raw"),
+        ],
+        output="screen",
+    )
+
+    gz_global_camera_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
+            "/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+        ],
+        remappings=[
+            ("/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image",
+             "/global_camera/color/image_raw"),
         ],
         output="screen",
     )
@@ -280,7 +296,8 @@ def launch_setup(context, *args, **kwargs):
         gz_launch_description_without_gui,
         gz_spawn_entity,
         gz_sim_bridge,
-        gz_image_bridge,
+        gz_wrist_camera_bridge,
+        gz_global_camera_bridge,
         delayed_controller_spawners,
         rviz_node,
     ]

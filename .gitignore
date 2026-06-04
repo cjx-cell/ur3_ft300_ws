@@ -22,3 +22,10 @@ Thumbs.db
 # Gazebo
 *.gv
 *.pdf
+
+# Model weights (too large for git — transfer via scp/rsync)
+ai-models/lerobot/pi0/*.safetensors
+outputs/
+
+# Collected data (optional: keep small .npz files, ignore large)
+ai-models/ur3_pick_place_raw/trajectory_viz/

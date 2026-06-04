@@ -3,9 +3,11 @@ Panels:
     Help Height: 70
     Name: Displays
     Property Tree Widget:
-      Expanded: ~
+      Expanded:
+        - /Image1
+        - /Image2
       Splitter Ratio: 0.5
-    Tree Height: 238
+    Tree Height: 227
   - Class: rviz_common/Help
     Name: Help
   - Class: rviz_common/Views
@@ -143,6 +145,10 @@ Visualization Manager:
             Show Trail: false
             Value: true
           global_camera_mount:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gripper_tip:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -412,6 +418,10 @@ Visualization Manager:
             Alpha: 1
             Show Axes: false
             Show Trail: false
+          gripper_tip:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
           robotiq_85_base_link:
             Alpha: 1
             Show Axes: false
@@ -568,7 +578,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image
+        Value: /wrist_camera/color/image_raw
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
@@ -582,7 +592,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image
+        Value: /global_camera/color/image_raw
       Value: true
     - Accept NaN Values: false
       Alpha: 1
@@ -621,7 +631,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.644298553466797
+      Distance: 3.7150490283966064
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -655,7 +665,7 @@ Window Geometry:
     collapsed: false
   MotionPlanning - Trajectory Slider:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000200000000000001f30000039efc0200000005fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb000000100044006900730070006c006100790073010000003d00000171000000c900fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e006701000001b40000017d0000017d00fffffffb0000000800480065006c0070000000029a0000006e0000006e00fffffffb0000000a005600690065007700730100000337000000a4000000a400ffffff00000001000002420000039efc0200000002fb0000000a0049006d006100670065010000003d000001cb0000002800fffffffb0000000a0049006d006100670065010000020e000001cd0000002800ffffff000002f90000039e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000200000000000001f30000039efc0200000005fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb000000100044006900730070006c006100790073010000003d00000166000000c900fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e006701000001a9000001880000017d00fffffffb0000000800480065006c0070000000029a0000006e0000006e00fffffffb0000000a005600690065007700730100000337000000a4000000a400ffffff00000001000002420000039efc0200000002fb0000000a0049006d006100670065010000003d000001cb0000002800fffffffb0000000a0049006d006100670065010000020e000001cd0000002800ffffff000002f90000039e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
     collapsed: false
   Width: 1850

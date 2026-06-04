@@ -15,13 +15,14 @@ ARM_JOINTS = [
 GRIPPER_JOINT = ["robotiq_85_left_knuckle_joint"]
 
 # Joint order: shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3
-HOME     = [-1.834, -1.883, -1.128, -1.646,  1.572,  0.297]
-ABOVE    = [-1.803, -1.942, -1.579, -1.136,  1.570, -0.202]
+HOME     = [ 0.0,   -1.57,    0.0,  -1.57,    0.0,   0.0  ]
+ABOVE    = [-1.834, -1.883, -1.128, -1.646,  1.572,  0.297]
+GRASP    = [-1.803, -1.942, -1.579, -1.136,  1.570, -0.202]
 LIFT     = [-1.803, -1.856, -1.293, -1.508,  1.570, -0.202]
 ABOVE_B  = [-0.761, -1.910, -1.230, -1.545,  1.523,  0.839]
 PLACE    = [-0.765, -1.925, -1.358, -1.402,  1.523,  0.835]
 
-GRASP_CLOSE = [0.6]
+GRASP_CLOSE = [0.65]
 GRASP_OPEN  = [0.0]
 
 
@@ -59,10 +60,11 @@ def main():
     go(gripper, GRASP_OPEN, "Open")
     go(arm, HOME, "Home")
     go(arm, ABOVE, "Above block")
+    go(arm, GRASP, "Grasp block")
     go(gripper, GRASP_CLOSE, "Close")
     go(arm, LIFT, "Lift")
     go(arm, ABOVE_B, "Above bowl")
-    go(arm, PLACE, "Place")
+    go(arm, PLACE, "Place in bowl")
     go(gripper, GRASP_OPEN, "Release")
     go(arm, ABOVE_B, "Retract")
     go(arm, HOME, "Home")
