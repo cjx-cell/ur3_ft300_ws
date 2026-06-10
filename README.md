@@ -44,11 +44,87 @@ ur3_ft300_ws/
 # ROS 2 + Gazebo
 sudo apt install ros-humble-ros-gz ros-humble-moveit ros-humble-ros2-control ros-humble-cv-bridge ros-humble-rqt-image-view
 pip install pymoveit2
+```
 
-# LeRobot + Pi0 (conda)
+### Pi0 Environment (two options)
+
+**Option A: Editable source install (recommended — allows modifying policy code)**
+
+```bash
+# Clone lerobot source
+git clone https://github.com/huggingface/lerobot.git ~/lerobot
+
+# Create env
+conda create -n pi0-env python=3.10
+conda activate pi0-env
+
+# Install lerobot in EDITABLE mode + dependencies
+cd ~/lerobot
+pip install -e .
+pip install safetensors torch torchvision transformers accelerate
+```
+
+With editable install (`-e`), any changes you make to `~/lerobot/src/lerobot/` take effect immediately — no reinstall needed.
+
+**Option B: Fixed pip install (inference only, no code changes)**
+
+```bash
 conda create -n pi0-env python=3.10
 conda activate pi0-env
 pip install lerobot safetensors torch torchvision transformers accelerate
+```
+
+Use this if you only need to run inference and won't modify policy code.
+
+### Where to modify Pi0 policy code
+
+After editable install, the Pi0 source lives at:
+
+| Module | Path | What it does |
+|--------|------|-------------|
+| Pi0 config | `~/lerobot/src/lerobot/policies/pi0/configuration_pi0.py` | Model hyperparameters, training flags |
+| Pi0 model | `~/lerobot/src/lerobot/policies/pi0/modeling_pi0.py` | Forward pass, action selection, diffusion |
+| Pi0 processor | `~/lerobot/src/lerobot/policies/pi0/processor_pi0.py` | Normalization, image preprocessing |
+| Training script | `~/lerobot/src/lerobot/scripts/lerobot_train.py` | CLI entry point for training |
+| Dataset class | `~/lerobot/src/lerobot/datasets/` | Data loading, augmentation |
+
+Your custom inference/ROS scripts are in this repo:
+```
+~/ur3_ft300_ws/src/ur_simulation_gz/ur_simulation_gz/scripts/
+├── ur3_pi0_inference.py    # Inference loop (modify gripper logic here)
+├── ur3_pi0_ros_side.py     # ROS bridge (modify control here)
+├── ur3_record_pick_place.py # Data collection
+└── ...
+```
+
+### Full new-server setup
+
+```bash
+# 1. ROS 2
+sudo apt install ros-humble-ros-gz ros-humble-moveit ros-humble-ros2-control ros-humble-cv-bridge ros-humble-rqt-image-view
+pip install pymoveit2
+
+# 2. Clone repos
+git clone https://github.com/cjx-cell/ur3_ft300_ws.git ~/ur3_ft300_ws
+git clone https://github.com/huggingface/lerobot.git ~/lerobot
+
+# 3. Pi0 env (editable)
+conda create -n pi0-env python=3.10
+conda activate pi0-env
+cd ~/lerobot && pip install -e .
+pip install safetensors torch torchvision transformers accelerate
+
+# 4. Transfer model weights (USB or rsync)
+# Copy these files into ~/ur3_ft300_ws/:
+#   ai-models/lerobot/pi0/*.safetensors       (~40 GB)
+#   ai-models/paligemma_tokenizer/*            (tokenizer)
+#   outputs/                                    (fine-tuned checkpoints, if any)
+
+# 5. Build workspace
+cd ~/ur3_ft300_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
 ```
 
 ## Build
