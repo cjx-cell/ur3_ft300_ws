@@ -55,7 +55,7 @@ pip install pymoveit2
 git clone https://github.com/huggingface/lerobot.git ~/lerobot
 
 # Create env
-conda create -n pi0-env python=3.10
+conda create -n pi0-env python=3.12
 conda activate pi0-env
 
 # Install lerobot in EDITABLE mode + dependencies
@@ -69,7 +69,7 @@ With editable install (`-e`), any changes you make to `~/lerobot/src/lerobot/` t
 **Option B: Fixed pip install (inference only, no code changes)**
 
 ```bash
-conda create -n pi0-env python=3.10
+conda create -n pi0-env python=3.12
 conda activate pi0-env
 pip install lerobot safetensors torch torchvision transformers accelerate
 ```
@@ -109,7 +109,7 @@ git clone https://github.com/cjx-cell/ur3_ft300_ws.git ~/ur3_ft300_ws
 git clone https://github.com/huggingface/lerobot.git ~/lerobot
 
 # 3. Pi0 env (editable)
-conda create -n pi0-env python=3.10
+conda create -n pi0-env python=3.12
 conda activate pi0-env
 cd ~/lerobot && pip install -e .
 pip install safetensors torch torchvision transformers accelerate
