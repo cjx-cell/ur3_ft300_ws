@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--repo_id", type=str, default="cjx-cell/ur3_pick_place",
                         help="HuggingFace dataset repo ID")
     parser.add_argument("--fps", type=int, default=20, help="帧率")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="本地输出目录 (默认同时保存到 ~/ur3_ft300_ws/ai-models/ur3_pick_place_lerobot)")
     parser.add_argument("--push_to_hub", action="store_true", help="推送到 HuggingFace Hub")
     args = parser.parse_args()
 
@@ -134,7 +136,12 @@ def main():
     print(f"\n数据集已创建: {total_frames} 帧, {len(episodes)} episodes, "
           f"耗时 {time.time()-t0:.1f}s")
 
-    stats = dataset.stats
+    stats = getattr(dataset, "stats", None)
+    if not stats:
+        try:
+            stats = dataset.meta.stats
+        except Exception:
+            stats = None
     if stats:
         print(f"\n归一化统计:")
         for k, v in stats.items():
@@ -143,6 +150,15 @@ def main():
 
     output_path = dataset.root
     print(f"\n数据集路径: {output_path}")
+
+    # 复制到本地目录
+    import shutil
+    local_dir = args.output_dir or os.path.expanduser(
+        "~/ur3_ft300_ws/ai-models/ur3_pick_place_lerobot")
+    if os.path.exists(local_dir):
+        shutil.rmtree(local_dir)
+    shutil.copytree(output_path, local_dir)
+    print(f"已复制到: {local_dir}")
 
     if args.push_to_hub:
         print("推送到 HuggingFace Hub...")

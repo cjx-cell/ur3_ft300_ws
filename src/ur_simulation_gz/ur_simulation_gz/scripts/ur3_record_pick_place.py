@@ -3,9 +3,9 @@
 运行 pick_and_place 并逐帧录制数据。
 
 改进版：
-- 关节状态从 /tmp/ur3_joint_state.txt 读取（需 ROS 端先启动）
+- 关节状态从 MoveIt2 内部 /joint_states 缓存实时读取
 - 相机从 ROS topic 直接订阅
-- 运动中逐帧录制，state 为实际关节值 + 插值混合
+- 运动中逐帧录制，state 为实际关节值（全轨迹收集）
 
 用法（需 Gazebo + MoveIt + ROS 端已运行）：
   /usr/bin/python3.10 ur3_record_pick_place.py --episodes 1
@@ -22,15 +22,21 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from pymoveit2 import MoveIt2
+from pymoveit2.moveit2 import MoveIt2State
+from sensor_msgs.msg import JointState
 
 ALL_JOINTS = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
     "robotiq_85_left_knuckle_joint",
 ]
+ARM_JOINT_NAMES = [
+    "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+    "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
+]
 GRIPPER_JOINT = ["robotiq_85_left_knuckle_joint"]
+GRIPPER_JOINT_NAME = "robotiq_85_left_knuckle_joint"
 IMG_SIZE = (224, 224)
-JOINT_STATE_FILE = "/tmp/ur3_joint_state.txt"
 
 HOME     = [ 0.0,   -1.57,    0.0,  -1.57,    0.0,   0.0  ]
 ABOVE    = [-1.834, -1.883, -1.128, -1.646,  1.572,  0.297]
@@ -44,20 +50,18 @@ GRASP_OPEN  = 0.0
 TASK = "pick up the red cube and place it into the bowl"
 
 
-def read_joints():
-    """从 /tmp/ 文件读取关节状态（ROS 端写入，格式: 7个空格分隔浮点数）"""
-    try:
-        with open(JOINT_STATE_FILE, "r") as f:
-            line = f.readline().strip()
-            if line:
-                vals = [float(x) for x in line.split()]
-                if len(vals) >= 6:
-                    if len(vals) == 6:
-                        vals.append(0.0)
-                    return np.array(vals[:7], dtype=np.float32)
-    except Exception:
-        pass
-    return np.zeros(7, dtype=np.float32)
+def get_current_joints(arm):
+    """从 MoveIt2 内部 /joint_states 缓存读取 7 维关节状态 [arm_6, gripper]"""
+    js = arm.joint_state
+    if js is None:
+        return np.zeros(7, dtype=np.float32)
+    pos = []
+    for name in ARM_JOINT_NAMES + [GRIPPER_JOINT_NAME]:
+        try:
+            pos.append(js.position[js.name.index(name)])
+        except ValueError:
+            pos.append(0.0)
+    return np.array(pos, dtype=np.float32)
 
 
 def main():
@@ -74,13 +78,15 @@ def main():
     cb = ReentrantCallbackGroup()
     arm = MoveIt2(node=node, joint_names=list(ALL_JOINTS[:6]),
                   base_link_name="base_link", end_effector_name="robotiq_85_base_link",
-                  group_name="ur_manipulator", callback_group=cb)
+                  group_name="ur_manipulator", callback_group=cb,
+                  use_move_group_action=True)
     arm.max_velocity = 1.0
     arm.max_acceleration = 1.0
 
     gripper = MoveIt2(node=node, joint_names=list(GRIPPER_JOINT),
                       base_link_name="base_link", end_effector_name="robotiq_85_base_link",
-                      group_name="gripper", callback_group=cb)
+                      group_name="gripper", callback_group=cb,
+                      use_move_group_action=True)
     gripper.max_velocity = 1.0
 
     executor = MultiThreadedExecutor(2)
@@ -88,6 +94,15 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     time.sleep(1.0)
+
+    def wait_for_idle(moveit, timeout=30.0):
+        """轮询等待 MoveIt2 变为 IDLE（不调用 spin_once，避免与后台 executor 冲突）"""
+        start = time.time()
+        while moveit.query_state() != MoveIt2State.IDLE:
+            if time.time() - start > timeout:
+                print("  ⚠ Timeout waiting for motion to complete")
+                break
+            time.sleep(0.05)
 
     # ── 相机订阅 ──
     class CameraCache:
@@ -136,29 +151,36 @@ def main():
     print("相机订阅就绪")
 
     # ── 录制辅助 ──
-    def record_frames(arm_from_6d, arm_to_6d, grip_val, duration):
-        """线性插值 state + 真实相机图像录制"""
+    def record_while_moving(target_6d, gripper_val, rate):
+        """在 arm 或 gripper 运动期间逐帧录制，读取实际关节状态 + 相机图像"""
+        action_7d = np.array(list(target_6d) + [gripper_val], dtype=np.float32)
         frames = []
-        n = max(int(duration * 20), 5)
-        for i in range(n):
-            t = i / n
-            arm_interp = np.array(arm_from_6d) * (1 - t) + np.array(arm_to_6d) * t
-            state_7d = np.array(list(arm_interp) + [grip_val], dtype=np.float32)
-            action_7d = np.array(list(arm_to_6d) + [grip_val], dtype=np.float32)
+
+        while (arm.query_state() != MoveIt2State.IDLE or
+               gripper.query_state() != MoveIt2State.IDLE):
+            state_7d = get_current_joints(arm)
             with cam_cache.lock:
                 w = cam_cache.wrist.copy()
                 g = cam_cache.global_img.copy()
             frames.append({"state": state_7d, "action": action_7d, "camera0": w, "camera1": g})
-            time.sleep(0.05)
-        # 到达后补录实际关节值
-        js = read_joints()
-        if np.abs(js).max() > 0.01:
-            frames[-1]["state"] = js
+            rate.sleep()
+
+        # 到达后补录几帧稳定状态
+        for _ in range(3):
+            state_7d = get_current_joints(arm)
+            with cam_cache.lock:
+                w = cam_cache.wrist.copy()
+                g = cam_cache.global_img.copy()
+            frames.append({"state": state_7d, "action": action_7d, "camera0": w, "camera1": g})
+            rate.sleep()
+
         return frames
 
-    last_arm = np.array(HOME, dtype=np.float32)[:6]
-    current_gripper = GRASP_OPEN
     total_frames = 0
+
+    # 等待首个有效关节状态
+    while arm.joint_state is None:
+        rclpy.spin_once(node, timeout_sec=0.5)
 
     for ep in range(args.episodes):
         all_frames = []
@@ -166,53 +188,59 @@ def main():
         print(f"Episode {ep+1}/{args.episodes}")
         print(f"{'='*60}")
 
-        def move_arm(arm_6d, duration=1.5):
-            nonlocal last_arm, current_gripper
-            from_6d = last_arm.copy()
-            arm.move_to_configuration(list(arm_6d))
-            frames = record_frames(from_6d, arm_6d, current_gripper, duration)
-            arm.wait_until_executed()
-            last_arm = np.array(arm_6d, dtype=np.float32)
-            return frames
+        rate = node.create_rate(20.0)
 
-        def move_gripper(val):
-            nonlocal current_gripper
-            gripper.move_to_configuration([val])
-            gripper.wait_until_executed()
-            current_gripper = val
-
+        # Step 1: Open → Home
         print("  Open → Home")
-        move_gripper(GRASP_OPEN)
-        all_frames += move_arm(HOME)
+        gripper.move_to_configuration([GRASP_OPEN])
+        wait_for_idle(gripper)
+        arm.move_to_configuration(HOME)
+        all_frames += record_while_moving(HOME, GRASP_OPEN, rate)
 
+        # Step 2: Above block
         print("  Above block")
-        all_frames += move_arm(ABOVE)
+        arm.move_to_configuration(ABOVE)
+        all_frames += record_while_moving(ABOVE, GRASP_OPEN, rate)
 
+        # Step 3: Grasp block
         print("  Grasp block")
-        all_frames += move_arm(GRASP)
+        arm.move_to_configuration(GRASP)
+        all_frames += record_while_moving(GRASP, GRASP_OPEN, rate)
 
+        # Step 4: Close gripper
         print("  Close gripper")
-        move_gripper(GRASP_CLOSE)
-        all_frames += record_frames(GRASP, GRASP, current_gripper, 0.3)
+        gripper.move_to_configuration([GRASP_CLOSE])
+        all_frames += record_while_moving(GRASP, GRASP_CLOSE, rate)
 
+        # Step 5: Lift
         print("  Lift")
-        all_frames += move_arm(LIFT)
+        arm.move_to_configuration(LIFT)
+        all_frames += record_while_moving(LIFT, GRASP_CLOSE, rate)
 
+        # Step 6: Above bowl
         print("  Above bowl")
-        all_frames += move_arm(ABOVE_B)
+        arm.move_to_configuration(ABOVE_B)
+        all_frames += record_while_moving(ABOVE_B, GRASP_CLOSE, rate)
 
+        # Step 7: Place
         print("  Place")
-        all_frames += move_arm(PLACE)
+        arm.move_to_configuration(PLACE)
+        all_frames += record_while_moving(PLACE, GRASP_CLOSE, rate)
 
+        # Step 8: Open gripper
         print("  Open gripper")
-        move_gripper(GRASP_OPEN)
-        all_frames += record_frames(PLACE, PLACE, current_gripper, 0.3)
+        gripper.move_to_configuration([GRASP_OPEN])
+        all_frames += record_while_moving(PLACE, GRASP_OPEN, rate)
 
+        # Step 9: Retract
         print("  Retract")
-        all_frames += move_arm(ABOVE_B)
+        arm.move_to_configuration(ABOVE_B)
+        all_frames += record_while_moving(ABOVE_B, GRASP_OPEN, rate)
 
+        # Step 10: Home
         print("  Home")
-        all_frames += move_arm(HOME)
+        arm.move_to_configuration(HOME)
+        all_frames += record_while_moving(HOME, GRASP_OPEN, rate)
 
         # 保存
         if all_frames:
