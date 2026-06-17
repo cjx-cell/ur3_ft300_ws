@@ -23,8 +23,11 @@ Thumbs.db
 *.gv
 *.pdf
 
-# Model weights (too large for git — transfer via scp/rsync)
+# Model weights (too large for git)
 ai-models/lerobot/pi0/*.safetensors
+ai-models/pi0_libero_base/*.safetensors
+ai-models/ur3_pi0_lora*/
+ai-models/ur3_pi0_*_merged/
 outputs/
 
 # Collected data (optional: keep small .npz files, ignore large)

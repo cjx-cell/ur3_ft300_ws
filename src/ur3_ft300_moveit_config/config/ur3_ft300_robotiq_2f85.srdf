@@ -9,32 +9,44 @@
     <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
     <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
     <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
+    <!--
+      ur_manipulator: 6-DOF arm chain.
+      chain base_link → tool0 automatically includes ALL links and joints
+      along the path (base_link through the 6 revolute joints to tool0).
+      KDL IK requires a clean serial chain — no extra <joint> or <link>
+      elements that would turn it into a non-chain tree.
+
+      gripper_tip and robotiq_85_base_link are NOT in this group;
+      they belong to the gripper group or are purely visual.
+    -->
     <group name="ur_manipulator">
-        <!-- 注释掉chain定义 -->
-        <!-- <chain base_link="base_link" tip_link="wrist_3_link"/> -->
-        
-        <!-- 显式列出所有6个活动关节，顺序无关 -->
-        <joint name="shoulder_pan_joint"/>
-        <joint name="shoulder_lift_joint"/>
-        <joint name="elbow_joint"/>
-        <joint name="wrist_1_joint"/>
-        <joint name="wrist_2_joint"/>
-        <joint name="wrist_3_joint"/>
+        <chain base_link="base_link" tip_link="tool0"/>
     </group>
 
     <group name="gripper">
         <joint name="robotiq_85_left_knuckle_joint"/>
     </group>
 
-    <!-- End effector: interactive marker appears at gripper tip center -->
-    <end_effector name="gripper_ee" group="gripper" parent_link="gripper_tip" parent_group="ur_manipulator"/>
+    <!-- End effector: gripper attached at tool0 (main chain),
+         parent_group = ur_manipulator tells MoveIt tool0 belongs to the arm group -->
+    <end_effector name="gripper_ee" group="gripper" parent_link="tool0" parent_group="ur_manipulator"/>
+
+    <!-- Virtual joint: critical for IK — tells MoveIt base_link is fixed to world -->
+    <virtual_joint name="virtual_joint" type="fixed" parent_frame="world" child_link="base_link"/>
+
+    <!-- Passive joints: mimic joints that aren't independently actuated -->
+    <passive_joint name="robotiq_85_left_inner_knuckle_joint"/>
+    <passive_joint name="robotiq_85_left_finger_tip_joint"/>
+    <passive_joint name="robotiq_85_right_inner_knuckle_joint"/>
+    <passive_joint name="robotiq_85_right_finger_tip_joint"/>
+    <passive_joint name="robotiq_85_right_knuckle_joint"/>
     <!--GROUP STATES: Purpose: Define a named state for a particular group, in terms of joint values. This is useful to define states like 'folded arms'-->
     <group_state name="home" group="ur_manipulator">
-        <joint name="elbow_joint" value="0"/>
+        <joint name="elbow_joint" value="1.5707"/>
         <joint name="shoulder_lift_joint" value="-1.5707"/>
         <joint name="shoulder_pan_joint" value="0"/>
-        <joint name="wrist_1_joint" value="0"/>
-        <joint name="wrist_2_joint" value="0"/>
+        <joint name="wrist_1_joint" value="-1.5707"/>
+        <joint name="wrist_2_joint" value="-1.5707"/>
         <joint name="wrist_3_joint" value="0"/>
     </group_state>
     <group_state name="up" group="ur_manipulator">
@@ -46,10 +58,10 @@
         <joint name="wrist_3_joint" value="0"/>
     </group_state>
     <group_state name="open" group="gripper">
-        <joint name="robotiq_85_left_knuckle_joint" value="0"/>
+        <joint name="robotiq_85_left_knuckle_joint" value="0.1"/>
     </group_state>
     <group_state name="close" group="gripper">
-        <joint name="robotiq_85_left_knuckle_joint" value="0.7"/>
+        <joint name="robotiq_85_left_knuckle_joint" value="0.45"/>
     </group_state>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
     <disable_collisions link1="base_link_inertia" link2="global_camera_link" reason="Adjacent"/>

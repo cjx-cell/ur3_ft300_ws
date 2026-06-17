@@ -40,7 +40,7 @@ joint_trajectory_controller:
       wrist_1_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
       wrist_2_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
       wrist_3_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
-      robotiq_85_left_knuckle_joint: {p: 500.0, i: 20.0, d: 20.0, ff_velocity_scale: 1.0}
+      robotiq_85_left_knuckle_joint: {p: 200.0, i: 0.0, d: 10.0, ff_velocity_scale: 1.0, i_clamp: 0.1}
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 1.0
@@ -50,7 +50,7 @@ joint_trajectory_controller:
       wrist_1_joint: { trajectory: 2.0, goal: 0.1 }
       wrist_2_joint: { trajectory: 2.0, goal: 0.1 }
       wrist_3_joint: { trajectory: 2.0, goal: 0.1 }
-      robotiq_85_left_knuckle_joint: { trajectory: 5.0, goal: 0.01 }
+      robotiq_85_left_knuckle_joint: { trajectory: 5.0, goal: 0.05 }
 
 # FT Sensor Broadcaster Configuration
 force_torque_sensor_broadcaster:

@@ -20,6 +20,11 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>ament_index_cpp</depend>
+  <depend>rclcpp</depend>
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>geometry_msgs</depend>
+
   <exec_depend>force_torque_sensor_broadcaster</exec_depend>
   <exec_depend>gripper_controllers</exec_depend>
   <exec_depend>ign_ros2_control</exec_depend>
