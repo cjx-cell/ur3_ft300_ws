@@ -22,11 +22,11 @@ except ImportError as e:
 
 
 def find_episodes(input_dir):
-    """扫描所有 episode_XXXX/data.npz 文件"""
+    """扫描所有 *_episode_*/data.npz 文件"""
     episodes = []
     for d in sorted(os.listdir(input_dir)):
         ep_dir = os.path.join(input_dir, d)
-        if d.startswith("episode_") and os.path.isdir(ep_dir):
+        if "_episode_" in d and os.path.isdir(ep_dir):
             npz_path = os.path.join(ep_dir, "data.npz")
             if os.path.exists(npz_path):
                 episodes.append(npz_path)
@@ -38,7 +38,7 @@ def main():
     parser.add_argument("--input", type=str, required=True, help="npz 数据集目录")
     parser.add_argument("--repo_id", type=str, default="cjx-cell/ur3_pick_place",
                         help="HuggingFace dataset repo ID")
-    parser.add_argument("--fps", type=int, default=20, help="帧率")
+    parser.add_argument("--fps", type=int, default=50, help="帧率 (Pi0 预训练原生 50Hz)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="本地输出目录 (默认同时保存到 ~/ur3_ft300_ws/ai-models/ur3_pick_place_lerobot)")
     parser.add_argument("--push_to_hub", action="store_true", help="推送到 HuggingFace Hub")
@@ -74,12 +74,12 @@ def main():
         "action": {
             "dtype": "float32",
             "shape": (action_shape,),
-            "names": joint_names if action_shape == 6 else [f"joint_{i}" for i in range(action_shape)],
+            "names": joint_names if action_shape == 7 else [f"joint_{i}" for i in range(action_shape)],
         },
         "observation.state": {
             "dtype": "float32",
             "shape": (state_shape,),
-            "names": joint_names if state_shape == 6 else [f"joint_{i}" for i in range(state_shape)],
+            "names": joint_names if state_shape == 7 else [f"joint_{i}" for i in range(state_shape)],
         },
         "observation.images.camera0": {
             "dtype": "video",
@@ -100,6 +100,7 @@ def main():
         features=features,
         robot_type="ur3",
         use_videos=True,
+        vcodec="h264",
     )
 
     # 逐 episode 添加帧

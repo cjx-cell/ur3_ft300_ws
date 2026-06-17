@@ -6,13 +6,14 @@ UR3 Pi0 ROS2 通信端 — 系统 Python 3.10（非 conda）
   - 订阅腕部+全局相机 RGB → 写入 /tmp/ur3_camera{0,1}.npy
   - 订阅 /joint_states → 写入 /tmp/ur3_joint_state.txt
   - 读取 /tmp/ur3_action.txt → 通过 FollowJointTrajectory 发送给机械臂
+  - --spawn: 在 Gazebo 中生成红色方块 + 蓝色碗
 
 用法:
   /usr/bin/python3.10 ur3_pi0_ros_side.py
-  /usr/bin/python3.10 ur3_pi0_ros_side.py --controller joint_trajectory_controller
+  /usr/bin/python3.10 ur3_pi0_ros_side.py --spawn --block-x 0.20 --block-y 0.35 --bowl-x -0.15 --bowl-y 0.35
 """
 
-import argparse, threading, os
+import argparse, threading, os, sys, subprocess, random, atexit
 import numpy as np
 import cv2
 import rclpy
@@ -28,8 +29,8 @@ from cv_bridge import CvBridge
 # ── 文件路径 ──
 JOINT_STATE_FILE = "/tmp/ur3_joint_state.txt"
 ACTION_FILE = "/tmp/ur3_action.txt"
-CAMERA0_FILE = "/tmp/ur3_camera0.npy"   # 腕部相机
-CAMERA1_FILE = "/tmp/ur3_camera1.npy"   # 全局相机
+CAMERA0_FILE = "/tmp/ur3_camera0.npy"
+CAMERA1_FILE = "/tmp/ur3_camera1.npy"
 TARGET_SIZE = (224, 224)
 
 ARM_JOINTS = [
@@ -37,6 +38,44 @@ ARM_JOINTS = [
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
     "robotiq_85_left_knuckle_joint",
 ]
+
+# ── 方块/碗 (与录制脚本一致) ──
+BLOCK_Z = 0.795
+BOWL_Z  = 0.775
+BLOCK_X_RANGE = (-0.25, 0.25)
+BLOCK_Y_RANGE = (0.18, 0.42)
+BOWL_X_RANGE  = (-0.25, 0.25)
+BOWL_Y_RANGE  = (0.18, 0.42)
+MIN_BLOCK_BOWL_DIST = 0.15
+MAX_XY_SQ = 0.23  # x² + y² ≤ 0.23
+
+BLOCK_SDF = """<sdf version='1.9'><model name='{name}'><link name='link'>
+<collision name='c'><geometry><box><size>0.04 0.04 0.04</size></box></geometry></collision>
+<visual name='v'><geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+<material><ambient>1 0 0 1</ambient><diffuse>1 0 0 1</diffuse></material></visual>
+<inertial><mass>5</mass><inertia><ixx>0.01</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.01</iyy><iyz>0</iyz><izz>0.01</izz></inertia></inertial></link></model></sdf>"""
+
+BOWL_SDF = """<sdf version='1.9'><model name='{name}'><link name='link'>
+<collision name='c'><geometry><cylinder><radius>0.08</radius><length>0.03</length></cylinder></geometry></collision>
+<visual name='v'><geometry><cylinder><radius>0.08</radius><length>0.03</length></cylinder></geometry>
+<material><ambient>0 0 0.8 1</ambient><diffuse>0 0 0.8 1</diffuse></material></visual>
+<inertial><mass>1</mass><inertia><ixx>0.005</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.005</iyy><iyz>0</iyz><izz>0.005</izz></inertia></inertial></link></model></sdf>"""
+
+
+def spawn_model(name, x, y, z, sdf):
+    r = subprocess.run(["/opt/ros/humble/bin/ros2", "run", "ros_gz_sim", "create",
+                        "-world", "simulation_world", "-name", name,
+                        "-x", str(x), "-y", str(y), "-z", str(z),
+                        "-string", sdf],
+                       capture_output=True, timeout=10)
+    return r.returncode == 0
+
+
+def delete_model(name):
+    subprocess.run(["ign", "service", "-s", "/world/simulation_world/remove",
+                    "--reqtype", "ignition.msgs.Entity", "--reptype", "ignition.msgs.Boolean",
+                    "--timeout", "1000", "-r", f'name: "{name}" type: MODEL'],
+                   capture_output=True, timeout=5)
 
 
 class UR3Pi0ROSSide(Node):
@@ -114,7 +153,7 @@ class UR3Pi0ROSSide(Node):
         try:
             goal_msg = FollowJointTrajectory.Goal()
             goal_msg.trajectory.joint_names = list(ARM_JOINTS)
-            target = np.clip(action, -np.pi, np.pi)  # 动作是绝对位置，非增量
+            target = np.clip(action, -np.pi, np.pi)
             point = JointTrajectoryPoint()
             point.positions = target.tolist()
             point.time_from_start.sec = 0
@@ -137,7 +176,6 @@ class UR3Pi0ROSSide(Node):
                         line = f.readline().strip()
                         if line:
                             action = np.array([float(x) for x in line.split()], dtype=np.float32)
-                            # 只在文件有更新且非零时才发送
                             if mtime != last_action and np.abs(action).max() > 0.01:
                                 self._send_action(action)
                                 last_action = mtime
@@ -150,7 +188,51 @@ class UR3Pi0ROSSide(Node):
 def main(args=None):
     parser = argparse.ArgumentParser(description="UR3 Pi0 ROS2 通信端")
     parser.add_argument("--controller", type=str, default="joint_trajectory_controller")
+    parser.add_argument("--spawn", action="store_true", help="生成方块和碗")
+    parser.add_argument("--block-x", type=float, default=0.20)
+    parser.add_argument("--block-y", type=float, default=0.35)
+    parser.add_argument("--bowl-x", type=float, default=-0.15)
+    parser.add_argument("--bowl-y", type=float, default=0.35)
     parsed_args, _ = parser.parse_known_args()
+
+    # ── Spawn objects (与录制脚本相同的位置约束) ──
+    spawned = []
+    if parsed_args.spawn:
+        block_name, bowl_name = "test_block", "test_bowl"
+
+        # 如果指定了位置就用指定的，否则随机（与录制脚本一致）
+        bx, by = parsed_args.block_x, parsed_args.block_y
+        wx, wy = parsed_args.bowl_x, parsed_args.bowl_y
+        if not any(f"--{a}" in sys.argv for a in ["block-x", "block-y", "bowl-x", "bowl-y"]):
+            for _ in range(100):
+                bx = random.uniform(*BLOCK_X_RANGE)
+                by = random.uniform(*BLOCK_Y_RANGE)
+                wx = random.uniform(*BOWL_X_RANGE)
+                wy = random.uniform(*BOWL_Y_RANGE)
+                if (bx**2 + by**2 <= MAX_XY_SQ and wx**2 + wy**2 <= MAX_XY_SQ and
+                    ((bx-wx)**2 + (by-wy)**2)**0.5 >= MIN_BLOCK_BOWL_DIST):
+                    break
+
+        print(f"Spawning block at ({bx:.2f}, {by:.2f})")
+        if spawn_model(block_name, bx, by, BLOCK_Z, BLOCK_SDF.format(name=block_name)):
+            print("  Block OK")
+            spawned.append(block_name)
+        else:
+            print("  Block FAILED")
+
+        print(f"Spawning bowl at ({wx:.2f}, {wy:.2f})")
+        if spawn_model(bowl_name, wx, wy, BOWL_Z, BOWL_SDF.format(name=bowl_name)):
+            print("  Bowl OK")
+            spawned.append(bowl_name)
+        else:
+            print("  Bowl FAILED")
+
+    if spawned:
+        def cleanup():
+            for name in spawned:
+                print(f"Deleting {name}...")
+                delete_model(name)
+        atexit.register(cleanup)
 
     rclpy.init(args=args)
     node = UR3Pi0ROSSide(controller_name=parsed_args.controller)

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-运行 pick_and_place 并逐帧录制数据。
+UR3 pick-and-place data recorder.
 
-改进版：
-- 关节状态从 MoveIt2 内部 /joint_states 缓存实时读取
-- 相机从 ROS topic 直接订阅
-- 运动中逐帧录制，state 为实际关节值（全轨迹收集）
+- Spawns block AND bowl at randomized positions in Gazebo
+- Runs C++ pick_and_place (passes block + bowl positions as ROS params)
+- Records joint_states + 2 cameras in background at 20 Hz
+- Deletes block and bowl after each episode
+- Saves LeRobot-compatible .npz per episode
 
-用法（需 Gazebo + MoveIt + ROS 端已运行）：
-  /usr/bin/python3.10 ur3_record_pick_place.py --episodes 1
+Run (Gazebo + MoveIt must be running):
+  /usr/bin/python3 ur3_record_pick_place.py --episodes 1
 """
 
-import argparse, os, time, threading, subprocess
+import argparse, os, time, threading, subprocess, random
 import numpy as np
 import cv2
 
@@ -19,108 +20,164 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, JointState
 from cv_bridge import CvBridge
-from pymoveit2 import MoveIt2
-from pymoveit2.moveit2 import MoveIt2State
-from sensor_msgs.msg import JointState
 
-ALL_JOINTS = [
-    "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
-    "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
-    "robotiq_85_left_knuckle_joint",
-]
-ARM_JOINT_NAMES = [
+ARM_JOINTS = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
 ]
-GRIPPER_JOINT = ["robotiq_85_left_knuckle_joint"]
-GRIPPER_JOINT_NAME = "robotiq_85_left_knuckle_joint"
+GRIPPER_JOINT = "robotiq_85_left_knuckle_joint"
+ALL_JOINTS = ARM_JOINTS + [GRIPPER_JOINT]
 IMG_SIZE = (224, 224)
-
-HOME     = [ 0.0,   -1.57,    0.0,  -1.57,    0.0,   0.0  ]
-ABOVE    = [-1.834, -1.883, -1.128, -1.646,  1.572,  0.297]
-GRASP    = [-1.803, -1.942, -1.579, -1.136,  1.570, -0.202]
-LIFT     = [-1.803, -1.856, -1.293, -1.508,  1.570, -0.202]
-ABOVE_B  = [-0.761, -1.910, -1.230, -1.545,  1.523,  0.839]
-PLACE    = [-0.765, -1.925, -1.358, -1.402,  1.523,  0.835]
-GRASP_CLOSE = 0.75
-GRASP_OPEN  = 0.0
-
+STATE_DIM = 7  # 6 arm joints + 1 gripper; Pi0 auto-pads to max_state_dim=32
 TASK = "pick up the red cube and place it into the bowl"
 
+# ── World constants (match C++ pick_and_place.cpp) ──
+BLOCK_Z = 0.795
+BOWL_Z  = 0.775  # bowl sits on table
 
-def get_current_joints(arm):
-    """从 MoveIt2 内部 /joint_states 缓存读取 7 维关节状态 [arm_6, gripper]"""
-    js = arm.joint_state
-    if js is None:
-        return np.zeros(7, dtype=np.float32)
-    pos = []
-    for name in ARM_JOINT_NAMES + [GRIPPER_JOINT_NAME]:
-        try:
-            pos.append(js.position[js.name.index(name)])
-        except ValueError:
-            pos.append(0.0)
-    return np.array(pos, dtype=np.float32)
+# Both within UR3 workspace: x² + y² ≤ 0.23 (reach radius ~0.5m from shoulder at 0,0,0.91)
+# Block and bowl at least 0.15m apart.
+BLOCK_X_RANGE = (-0.25, 0.25)
+BLOCK_Y_RANGE = (0.18, 0.42)
+BOWL_X_RANGE  = (-0.25, 0.25)
+BOWL_Y_RANGE  = (0.18, 0.42)
+MIN_BLOCK_BOWL_DIST = 0.15
+MAX_XY_SQ = 0.23  # x² + y² ≤ 0.23
+
+RECORD_HZ = 50  # Pi0 pretrained at 50Hz (chunk_size=50 = 1.0s action horizon)
+
+
+def spawn_model(name, x, y, z, sdf_string):
+    """Spawn a model in Gazebo via ros_gz_sim create. Returns True on success."""
+    try:
+        r = subprocess.run(
+            ["/opt/ros/humble/bin/ros2", "run", "ros_gz_sim", "create",
+             "-world", "simulation_world", "-name", name,
+             "-x", str(x), "-y", str(y), "-z", str(z),
+             "-string", sdf_string],
+            capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception as e:
+        print(f"  ⚠ spawn failed: {e}")
+        return False
+
+
+def get_model_pose(name):
+    """Query a model's world pose via ign topic (Ignition Transport)."""
+    import re
+    try:
+        r = subprocess.run(
+            ["ign", "topic", "-t", "/world/simulation_world/pose/info",
+             "-e", "-n", "1"],
+            capture_output=True, timeout=5)
+        if r.returncode == 0 and r.stdout:
+            text = r.stdout.decode()
+            idx = text.find(f'name: "{name}"')
+            if idx >= 0:
+                snippet = text[idx:idx+200]
+                m = re.search(
+                    r'position\s*\{\s*x:\s*([\d.e-]+)\s*y:\s*([\d.e-]+)\s*z:\s*([\d.e-]+)',
+                    snippet)
+                if m:
+                    return (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+    except Exception:
+        pass
+    return None
+
+
+
+def delete_model(name):
+    """Delete a model from Gazebo via ign service (Ignition Transport)."""
+    try:
+        r = subprocess.run(
+            ["ign", "service", "-s", "/world/simulation_world/remove",
+             "--reqtype", "ignition.msgs.Entity",
+             "--reptype", "ignition.msgs.Boolean",
+             "--timeout", "1000",
+             "-r", f'name: "{name}" type: MODEL'],
+            capture_output=True, timeout=5)
+        if r.returncode == 0 and b"data: true" in r.stdout:
+            return True
+        else:
+            print(f"  ⚠ delete failed for '{name}': "
+                  f"stdout={r.stdout.decode()[:100]} "
+                  f"stderr={r.stderr.decode()[:100]}")
+            return False
+    except Exception as e:
+        print(f"  ⚠ delete exception: {e}")
+        return False
+
+
+# ── SDF templates ──
+BLOCK_SDF = """<sdf version='1.9'>
+<model name='{name}'>
+<link name='link'>
+<collision name='collision'>
+<geometry><box><size>0.04 0.04 0.04</size></box></geometry></collision>
+<visual name='visual'>
+<geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+<material><ambient>1 0 0 1</ambient><diffuse>1 0 0 1</diffuse></material></visual>
+<inertial><mass>5</mass><inertia>
+<ixx>0.01</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.01</iyy><iyz>0</iyz><izz>0.01</izz>
+</inertia></inertial></link></model></sdf>"""
+
+# Bowl: flat cylinder, 0.08m radius, 0.03m tall, blue
+BOWL_SDF = """<sdf version='1.9'>
+<model name='{name}'>
+<link name='link'>
+<collision name='collision'>
+<geometry><cylinder><radius>0.08</radius><length>0.03</length></cylinder></geometry></collision>
+<visual name='visual'>
+<geometry><cylinder><radius>0.08</radius><length>0.03</length></cylinder></geometry>
+<material><ambient>0 0 0.8 1</ambient><diffuse>0 0 0.8 1</diffuse></material></visual>
+<inertial><mass>1</mass><inertia>
+<ixx>0.005</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.005</iyy><iyz>0</iyz><izz>0.005</izz>
+</inertia></inertial></link></model></sdf>"""
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--output", type=str, default=os.path.expanduser("~/ur3_ft300_ws/ai-models/ur3_pick_place_raw"))
+    parser.add_argument("--output", type=str,
+                        default=os.path.expanduser(
+                            "~/ur3_ft300_ws/ai-models/ur3_pick_place_raw"))
     args = parser.parse_args()
 
     rclpy.init()
     os.makedirs(args.output, exist_ok=True)
 
-    # ── MoveIt2 ──
-    node = rclpy.create_node("record_pp")
-    cb = ReentrantCallbackGroup()
-    arm = MoveIt2(node=node, joint_names=list(ALL_JOINTS[:6]),
-                  base_link_name="base_link", end_effector_name="robotiq_85_base_link",
-                  group_name="ur_manipulator", callback_group=cb,
-                  use_move_group_action=True)
-    arm.max_velocity = 1.0
-    arm.max_acceleration = 1.0
-
-    gripper = MoveIt2(node=node, joint_names=list(GRIPPER_JOINT),
-                      base_link_name="base_link", end_effector_name="robotiq_85_base_link",
-                      group_name="gripper", callback_group=cb,
-                      use_move_group_action=True)
-    gripper.max_velocity = 1.0
-
-    executor = MultiThreadedExecutor(2)
-    executor.add_node(node)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    spin_thread.start()
-    time.sleep(1.0)
-
-    def wait_for_idle(moveit, timeout=30.0):
-        """轮询等待 MoveIt2 变为 IDLE（不调用 spin_once，避免与后台 executor 冲突）"""
-        start = time.time()
-        while moveit.query_state() != MoveIt2State.IDLE:
-            if time.time() - start > timeout:
-                print("  ⚠ Timeout waiting for motion to complete")
-                break
-            time.sleep(0.05)
-
-    # ── 相机订阅 ──
-    class CameraCache:
-        wrist = np.zeros((*IMG_SIZE, 3), dtype=np.float32)
-        global_img = np.zeros((*IMG_SIZE, 3), dtype=np.float32)
-        lock = threading.Lock()
-
-    cam_cache = CameraCache()
-
-    class CamNode(Node):
+    # ── Shared buffer (thread-safe) ──
+    class Buffer:
         def __init__(self):
-            super().__init__("record_cams")
+            self.lock = threading.Lock()
+            self.joint_positions = None
+            self.wrist_img = np.zeros((*IMG_SIZE, 3), dtype=np.float32)
+            self.global_img = np.zeros((*IMG_SIZE, 3), dtype=np.float32)
+
+    buf = Buffer()
+
+    # ── Subscriber node ──
+    class RecorderNode(Node):
+        def __init__(self):
+            super().__init__("record_pp")
             self.bridge = CvBridge()
             cbg = ReentrantCallbackGroup()
+            self.create_subscription(JointState, "/joint_states",
+                                      self._js, 10, callback_group=cbg)
             self.create_subscription(Image, "/wrist_camera/color/image_raw",
                                       self._wrist, 10, callback_group=cbg)
             self.create_subscription(Image, "/global_camera/color/image_raw",
                                       self._global, 10, callback_group=cbg)
+
+        def _js(self, msg):
+            try:
+                pos = [msg.position[msg.name.index(n)] for n in ALL_JOINTS]
+                with buf.lock:
+                    buf.joint_positions = pos
+            except ValueError:
+                pass
 
         def _decode(self, msg):
             try:
@@ -133,155 +190,174 @@ def main():
         def _wrist(self, msg):
             img = self._decode(msg)
             if img is not None:
-                with cam_cache.lock:
-                    cam_cache.wrist = img
+                with buf.lock:
+                    buf.wrist_img = img
 
         def _global(self, msg):
             img = self._decode(msg)
             if img is not None:
-                with cam_cache.lock:
-                    cam_cache.global_img = img
+                with buf.lock:
+                    buf.global_img = img
 
-    cam_node = CamNode()
-    cam_exec = MultiThreadedExecutor(2)
-    cam_exec.add_node(cam_node)
-    cam_thread = threading.Thread(target=cam_exec.spin, daemon=True)
-    cam_thread.start()
-    time.sleep(1.0)
-    print("相机订阅就绪")
+    recorder = RecorderNode()
+    executor = MultiThreadedExecutor(3)
+    executor.add_node(recorder)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
 
-    # ── 录制辅助 ──
-    def record_while_moving(target_6d, gripper_val, rate):
-        """在 arm 或 gripper 运动期间逐帧录制，读取实际关节状态 + 相机图像"""
-        action_7d = np.array(list(target_6d) + [gripper_val], dtype=np.float32)
-        frames = []
+    # Wait for joint states
+    print("Waiting for joint states...")
+    for _ in range(50):
+        with buf.lock:
+            if buf.joint_positions is not None:
+                print("Joint states available")
+                break
+        time.sleep(0.1)
+    else:
+        print("ERROR: no joint states received")
+        return
 
-        while (arm.query_state() != MoveIt2State.IDLE or
-               gripper.query_state() != MoveIt2State.IDLE):
-            state_7d = get_current_joints(arm)
-            with cam_cache.lock:
-                w = cam_cache.wrist.copy()
-                g = cam_cache.global_img.copy()
-            frames.append({"state": state_7d, "action": action_7d, "camera0": w, "camera1": g})
+    # ── Background recording ──
+    recording = threading.Event()
+    recording.set()
+    frames = []
+    episode_active = threading.Event()  # set when C++ reaches HOME
+
+    def recorder_thread():
+        rate = recorder.create_rate(RECORD_HZ)
+        while recording.is_set():
+            with buf.lock:
+                js = (list(buf.joint_positions) if buf.joint_positions
+                      else [0.0] * 7)
+                w = buf.wrist_img.copy()
+                g = buf.global_img.copy()
+            if episode_active.is_set():
+                frames.append({
+                    "state": np.array(js, dtype=np.float32),
+                    "camera0": w,
+                    "camera1": g,
+                    "timestamp": time.time(),
+                })
             rate.sleep()
 
-        # 到达后补录几帧稳定状态
-        for _ in range(3):
-            state_7d = get_current_joints(arm)
-            with cam_cache.lock:
-                w = cam_cache.wrist.copy()
-                g = cam_cache.global_img.copy()
-            frames.append({"state": state_7d, "action": action_7d, "camera0": w, "camera1": g})
-            rate.sleep()
-
-        return frames
+    rec_thread = threading.Thread(target=recorder_thread, daemon=True)
+    rec_thread.start()
+    print(f"Recording started ({RECORD_HZ} Hz)")
 
     total_frames = 0
 
-    # 等待首个有效关节状态
-    while arm.joint_state is None:
-        rclpy.spin_once(node, timeout_sec=0.5)
+    try:
+        for ep in range(args.episodes):
+            print(f"\n{'='*60}")
+            print(f"Episode {ep+1}/{args.episodes}")
 
-    for ep in range(args.episodes):
-        all_frames = []
-        print(f"\n{'='*60}")
-        print(f"Episode {ep+1}/{args.episodes}")
-        print(f"{'='*60}")
+            # ── Randomized positions (ensure block and bowl far enough apart) ──
+            for _ in range(100):  # retry if constraints not met
+                block_x = round(random.uniform(*BLOCK_X_RANGE), 3)
+                block_y = round(random.uniform(*BLOCK_Y_RANGE), 3)
+                bowl_x  = round(random.uniform(*BOWL_X_RANGE), 3)
+                bowl_y  = round(random.uniform(*BOWL_Y_RANGE), 3)
+                # Workspace: x² + y² ≤ MAX_XY_SQ (~0.48m from shoulder)
+                b_ok = block_x**2 + block_y**2 <= MAX_XY_SQ
+                w_ok = bowl_x**2  + bowl_y**2  <= MAX_XY_SQ
+                dist = ((block_x - bowl_x)**2 + (block_y - bowl_y)**2)**0.5
+                if b_ok and w_ok and dist >= MIN_BLOCK_BOWL_DIST:
+                    break
+            print(f"  Block: x={block_x:.3f}, y={block_y:.3f}")
+            print(f"  Bowl:  x={bowl_x:.3f}, y={bowl_y:.3f}")
 
-        rate = node.create_rate(20.0)
+            block_name = f"pick_block_{ep:04d}"
+            bowl_name  = f"pick_bowl_{ep:04d}"
 
-        # Step 1: Open → Home
-        print("  Open → Home")
-        gripper.move_to_configuration([GRASP_OPEN])
-        wait_for_idle(gripper)
-        arm.move_to_configuration(HOME)
-        all_frames += record_while_moving(HOME, GRASP_OPEN, rate)
+            # ── Spawn block and bowl ──
+            ok_block = spawn_model(block_name, block_x, block_y, BLOCK_Z,
+                                   BLOCK_SDF.format(name=block_name))
+            ok_bowl  = spawn_model(bowl_name, bowl_x, bowl_y, BOWL_Z,
+                                   BOWL_SDF.format(name=bowl_name))
+            if not ok_block or not ok_bowl:
+                print("  ⚠ spawn failed, skipping episode")
+                delete_model(block_name)
+                delete_model(bowl_name)
+                continue
 
-        # Step 2: Above block
-        print("  Above block")
-        arm.move_to_configuration(ABOVE)
-        all_frames += record_while_moving(ABOVE, GRASP_OPEN, rate)
+            time.sleep(0.5)
 
-        # Step 3: Grasp block
-        print("  Grasp block")
-        arm.move_to_configuration(GRASP)
-        all_frames += record_while_moving(GRASP, GRASP_OPEN, rate)
+            # ── Run C++ pick_and_place (start recording after RECORD_START) ──
+            print(f"  Running C++ pick_and_place...")
+            episode_active.clear()
+            frames.clear()
+            proc = subprocess.Popen(
+                ["/opt/ros/humble/bin/ros2", "run", "ur_simulation_gz",
+                 "pick_and_place",
+                 "--ros-args",
+                 "-p", f"block_x:={block_x}",
+                 "-p", f"block_y:={block_y}",
+                 "-p", f"bowl_x:={bowl_x}",
+                 "-p", f"bowl_y:={bowl_y}",
+                 "-p", "skip_home:=true"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True)
 
-        # Step 4: Close gripper
-        print("  Close gripper")
-        gripper.move_to_configuration([GRASP_CLOSE])
-        all_frames += record_while_moving(GRASP, GRASP_CLOSE, rate)
+            for line in proc.stdout:
+                if "RECORD_START" in line:
+                    episode_active.set()
+                    frames.clear()
+                    print("  RECORD_START → recording task trajectory")
+            proc.wait()
+            episode_active.clear()
+            result_rc = proc.returncode
+            print(f"  C++ rc={result_rc}, frames recorded: {len(frames)}")
 
-        # Step 5: Lift
-        print("  Lift")
-        arm.move_to_configuration(LIFT)
-        all_frames += record_while_moving(LIFT, GRASP_CLOSE, rate)
+            # ── Determine success (pose query if available, else trust C++) ──
+            time.sleep(1.0)  # let physics settle
+            block_pose = get_model_pose(block_name)
+            if block_pose is not None:
+                dist = ((block_pose[0] - bowl_x)**2 + (block_pose[1] - bowl_y)**2)**0.5
+                ok = dist <= 0.08
+                success_str = "success" if ok else "failed"
+                status_icon = "✓" if ok else "✗"
+                print(f"  {status_icon} {success_str} — block {dist:.4f}m from bowl center")
+            else:
+                success_str = "success" if result_rc == 0 else "failed"
+                print(f"  C++ rc={result_rc} → {success_str}")
 
-        # Step 6: Above bowl
-        print("  Above bowl")
-        arm.move_to_configuration(ABOVE_B)
-        all_frames += record_while_moving(ABOVE_B, GRASP_CLOSE, rate)
+            # ── Delete block and bowl ──
+            delete_model(block_name)
+            delete_model(bowl_name)
 
-        # Step 7: Place
-        print("  Place")
-        arm.move_to_configuration(PLACE)
-        all_frames += record_while_moving(PLACE, GRASP_CLOSE, rate)
+            # ── Save (Pi0 format: 7D absolute, action=next_state) ──
+            if len(frames) > 1:
+                raw_states = np.stack([f["state"] for f in frames])
+                cam0 = np.stack([f["camera0"] for f in frames])
+                cam1 = np.stack([f["camera1"] for f in frames])
 
-        # Step 8: Open gripper
-        print("  Open gripper")
-        gripper.move_to_configuration([GRASP_OPEN])
-        all_frames += record_while_moving(PLACE, GRASP_OPEN, rate)
+                # 7D absolute joint positions → Pi0 auto-pads to max_state_dim=32
+                states_out  = raw_states[:-1]
+                actions_out = raw_states[1:]   # next_state as absolute action
+                cam0_out    = cam0[:-1]
+                cam1_out    = cam1[:-1]
 
-        # Step 9: Retract
-        print("  Retract")
-        arm.move_to_configuration(ABOVE_B)
-        all_frames += record_while_moving(ABOVE_B, GRASP_OPEN, rate)
+                task_prefix = TASK.replace(" ", "_")
+                ep_name = f"{task_prefix}_episode_{ep:04d}_{success_str}"
+                ep_dir  = os.path.join(args.output, ep_name)
+                os.makedirs(ep_dir, exist_ok=True)
+                timestamps = np.array([f["timestamp"] for f in frames[:-1]],
+                                      dtype=np.float64)
+                np.savez_compressed(
+                    os.path.join(ep_dir, "data.npz"),
+                    state=states_out, action=actions_out,
+                    camera0=cam0_out, camera1=cam1_out,
+                    timestamp=timestamps, task=TASK)
+                total_frames += len(states_out)
+                print(f"  Saved: {ep_name} — {len(states_out)} frames")
 
-        # Step 10: Home
-        print("  Home")
-        arm.move_to_configuration(HOME)
-        all_frames += record_while_moving(HOME, GRASP_OPEN, rate)
-
-        # 保存
-        if all_frames:
-            states = np.stack([f["state"] for f in all_frames])
-            actions = np.stack([f["action"] for f in all_frames])
-            cam0 = np.stack([f["camera0"] for f in all_frames])
-            cam1 = np.stack([f["camera1"] for f in all_frames])
-            ep_dir = os.path.join(args.output, f"episode_{ep:04d}")
-            os.makedirs(ep_dir, exist_ok=True)
-            np.savez_compressed(os.path.join(ep_dir, "data.npz"),
-                                state=states, action=actions,
-                                camera0=cam0, camera1=cam1, task=TASK)
-            total_frames += len(all_frames)
-            print(f"  Saved: {len(all_frames)} frames | "
-                  f"state range=[{states.min():.1f},{states.max():.1f}]")
-
-            # 重置方块
-            try:
-                subprocess.run(["/opt/ros/humble/bin/ros2", "run", "ros_gz_sim", "create",
-                                "-world", "simulation_world", "-name", "pick_block",
-                                "-x", "0.2", "-y", "0.35", "-z", "0.795",
-                                "-string",
-                                "<sdf version='1.9'><model name='pick_block'>"
-                                "<link name='link'>"
-                                "<collision name='collision'><geometry><box><size>0.04 0.04 0.04</size></box></geometry></collision>"
-                                "<visual name='visual'><geometry><box><size>0.04 0.04 0.04</size></box></geometry>"
-                                "<material><ambient>1 0 0 1</ambient><diffuse>1 0 0 1</diffuse></material></visual>"
-                                "<inertial><mass>5</mass>"
-                                "<inertia><ixx>0.01</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.01</iyy><iyz>0</iyz><izz>0.01</izz></inertia></inertial>"
-                                "</link></model></sdf>",
-                                "-allow_renaming", "true"],
-                               capture_output=True, timeout=5)
-            except Exception:
-                pass
-
-    print(f"\nDone: {total_frames} frames, {args.episodes} episodes → {args.output}")
-    print(f"Next: conda activate pi0-env && python3 ur3_convert_to_lerobot.py --input {args.output}")
-
-    executor.shutdown()
-    cam_exec.shutdown()
-    rclpy.shutdown()
+    finally:
+        recording.clear()
+        rec_thread.join(timeout=2.0)
+        print(f"\nDone: {total_frames} frames, {args.episodes} episodes → "
+              f"{args.output}")
+        executor.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

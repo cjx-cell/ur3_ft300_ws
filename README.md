@@ -29,13 +29,13 @@ vision-language-action model** for "pick up the red cube and place it into the b
 
 ```
 ~/ur3_ft300_ws/
-├── src/ur_simulation_gz/    # Simulation package + all scripts
+├── src/ur_simulation_gz/       # Simulation package + all scripts
 ├── ai-models/
-│   ├── lerobot/pi0/          # Base Pi0 pre-trained model (~40 GB)
-│   ├── paligemma_tokenizer/  # PaliGemma tokenizer
-│   ├── ur3_pick_place_raw/   # Recorded trajectory data (.npz)
-│   └── ur3_pick_place_lerobot/ # Converted LeRobot dataset
-├── outputs/train/            # Fine-tuned checkpoints
+│   ├── pi0_libero_base/         # Pi0 fine-tuned on LIBERO (starting point)
+│   ├── paligemma_tokenizer/     # PaliGemma tokenizer
+│   ├── ur3_pick_place_raw/      # Recorded trajectory data (.npz)
+│   └── ur3_pick_place_lerobot/  # Converted LeRobot dataset
+├── outputs/train/               # Fine-tuned checkpoints
 └── README.md
 ```
 
@@ -64,7 +64,7 @@ git clone https://github.com/huggingface/lerobot.git ~/lerobot
 conda create -n pi0-env python=3.12
 conda activate pi0-env
 cd ~/lerobot && pip install -e .
-pip install safetensors torch torchvision transformers accelerate
+pip install safetensors torch torchvision transformers accelerate peft
 ```
 
 ### 1.4 Build Workspace
@@ -78,11 +78,25 @@ source install/setup.bash
 
 ### 1.5 Model Weights
 
-Copy base Pi0 weights and tokenizer into `~/ur3_ft300_ws/ai-models/`:
+Download the **Pi0 Libero base model** (VLM already fine-tuned on 130+ robot manipulation tasks):
 
+```bash
+# From HuggingFace (with mirror for China):
+export HF_ENDPOINT=https://hf-mirror.com
+conda activate pi0-env
+python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download('lerobot/pi0_libero_base',
+                   local_dir='./ai-models/pi0_libero_base')
+"
 ```
-ai-models/lerobot/pi0/*.safetensors   # ~40 GB
-ai-models/paligemma_tokenizer/*        # tokenizer.json, tokenizer.model
+
+Also copy the PaliGemma tokenizer:
+
+```bash
+# Tokenizer (from original Pi0 or download from HuggingFace):
+# Place tokenizer.json and tokenizer.model in:
+#   ai-models/paligemma_tokenizer/
 ```
 
 ---
@@ -100,13 +114,13 @@ ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py
 ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py gazebo_gui:=false
 ```
 
-Wait ~30 seconds for controllers to start (joint_state_broadcaster, joint_trajectory_controller).
+Wait ~30 seconds for controllers to start.
 
 ---
 
 ## 3. Data Collection
 
-### 3.1 Start MoveIt (planning only)
+### 3.1 Start MoveIt
 
 **Terminal 2:**
 
@@ -116,11 +130,7 @@ source install/setup.bash
 ros2 launch ur3_ft300_moveit_config move_group.launch.py
 ```
 
-Wait for `You can start planning now!`.
-
 ### 3.2 Record Episodes
-
-**Terminal 2 (same terminal, after MoveIt is ready):**
 
 ```bash
 /usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_record_pick_place.py \
@@ -130,11 +140,11 @@ Wait for `You can start planning now!`.
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--episodes` | 1 | Number of episodes to record |
-| `--output` | `~/ur3_ft300_ws/ai-models/ur3_pick_place_raw` | Output directory |
+| `--output` | `ai-models/ur3_pick_place_raw` | Output directory |
 
-Each episode saves as `episode_XXXX/data.npz`:
-- `state`: (N, 7) actual joint positions from `/joint_states`
-- `action`: (N, 7) target waypoint being moved toward
+Each episode saves as `<task>_episode_XXXX/<status>/data.npz`:
+- `state`: (N, 7) joint positions from `/joint_states`
+- `action`: (N, 7) next state = absolute joint positions
 - `camera0`: (N, 224, 224, 3) wrist camera
 - `camera1`: (N, 224, 224, 3) global camera
 - `task`: language instruction
@@ -142,17 +152,14 @@ Each episode saves as `episode_XXXX/data.npz`:
 ### 3.3 Visualize Recordings
 
 ```bash
-# Generate videos (all episodes, camera + joint curves):
+# Generate videos (all episodes):
 /usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/make_video.py
 
 # Single episode:
 /usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/make_video.py --episode 0
 
-# Static per-joint analysis charts:
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/visualize_dataset.py
-
-# Watch a video:
-mpv ~/ur3_ft300_ws/ai-models/ur3_pick_place_raw/trajectory_viz/episode_0000.mp4
+# Watch:
+mpv ai-models/ur3_pick_place_raw/trajectory_viz/episode_0000.mp4
 ```
 
 ### 3.4 Convert to LeRobot Format
@@ -161,94 +168,156 @@ mpv ~/ur3_ft300_ws/ai-models/ur3_pick_place_raw/trajectory_viz/episode_0000.mp4
 conda activate pi0-env
 
 python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_convert_to_lerobot.py \
-    --input ~/ur3_ft300_ws/ai-models/ur3_pick_place_raw
+    --input ai-models/ur3_pick_place_raw
 
 # Push to HuggingFace Hub:
 python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_convert_to_lerobot.py \
-    --input ~/ur3_ft300_ws/ai-models/ur3_pick_place_raw \
+    --input ai-models/ur3_pick_place_raw \
     --push_to_hub
 ```
-
-Output: `~/ur3_ft300_ws/ai-models/ur3_pick_place_lerobot/` (LeRobot v3.0 format, AV1 videos).
 
 ---
 
 ## 4. Training
 
+### Strategy Comparison
+
+| Strategy | GPU | VRAM | Trainable Params | Best For |
+|----------|-----|------|-----------------|----------|
+| LoRA rank=16 | RTX 5080 16GB | ~9 GB | ~48M | Quick experiments |
+| LoRA rank=16 (VLM+Expert) | RTX 5080 16GB | ~10 GB | ~48M | Better visual adaptation |
+| Full Expert Only | RTX 5080 16GB | ~12 GB | ~300M | Max capacity, frozen VLM |
+| **Full Fine-tune** | **A100 40/80GB** | **~35 GB** | **~2.3B** | **Best quality** |
+
+### 4.1 LoRA Fine-tuning (RTX 5080, Local)
+
+For quick experiments on a 5080 GPU. LoRA adapts Q/V attention in both VLM and action expert.
+
 ```bash
 conda activate pi0-env
 
-# Action-Expert only (~15 GB VRAM, single GPU)
-python -m lerobot.scripts.lerobot_train \
-    --policy.path=./ai-models/lerobot/pi0 \
-    --dataset.repo_id=cjx-cell/ur3_pick_place \
-    --policy.train_expert_only=true \
-    --policy.dtype=bfloat16 \
-    --policy.device=cuda \
-    --policy.gradient_checkpointing=true \
-    --batch_size=2 \
-    --steps=5000 \
-    --output_dir=./outputs/train/pi0_ur3_expert
-
-# Full VLM fine-tuning (2× A100 80GB recommended)
-python -m lerobot.scripts.lerobot_train \
-    --policy.path=./ai-models/lerobot/pi0 \
-    --dataset.repo_id=cjx-cell/ur3_pick_place \
-    --policy.train_expert_only=false \
-    --policy.freeze_vision_encoder=false \
-    --policy.dtype=bfloat16 \
-    --policy.device=cuda \
-    --policy.gradient_checkpointing=true \
-    --policy.optimizer_lr=2e-5 \
-    --batch_size=1 \
-    --steps=3000 \
-    --output_dir=./outputs/train/pi0_ur3_full
+/home/ubuntu/miniconda3/envs/pi0-env/bin/python -m lerobot.scripts.lerobot_train \
+  --policy.path=./ai-models/pi0_libero_base \
+  --dataset.repo_id=cjx-cell/ur3_pick_place \
+  --policy.dtype=bfloat16 \
+  --policy.device=cuda \
+  --policy.gradient_checkpointing=true \
+  --batch_size=1 \
+  --steps=40000 \
+  --peft.r=16 \
+  --tolerance_s=0.001 \
+  --output_dir=./outputs/train/ur3_pi0_lora \
+  --save_freq=20000 \
+  --log_freq=100
 ```
 
-**Key training flags:**
+### 4.2 Full Fine-tune (A100, Remote Server)
+
+Full model training on A100. All 2.3B parameters updated — VLM learns Gazebo visual features from scratch.
+
+```bash
+conda activate pi0-env
+
+python -m lerobot.scripts.lerobot_train \
+  --policy.path=./ai-models/pi0_libero_base \
+  --dataset.repo_id=cjx-cell/ur3_pick_place \
+  --policy.dtype=bfloat16 \
+  --policy.device=cuda \
+  --policy.train_expert_only=false \
+  --policy.freeze_vision_encoder=false \
+  --policy.gradient_checkpointing=false \
+  --policy.optimizer_lr=1e-5 \
+  --batch_size=2 \
+  --steps=60000 \
+  --tolerance_s=0.001 \
+  --output_dir=./outputs/train/ur3_pi0_full \
+  --save_freq=10000 \
+  --log_freq=50
+```
 
 | Flag | Effect |
 |------|--------|
-| `--policy.train_expert_only=true` | Freeze VLM, only train action head (~15 GB VRAM) |
-| `--policy.train_expert_only=false` | Full VLM fine-tuning (70+ GB VRAM) |
-| `--policy.dtype=bfloat16` | Halve VRAM usage |
-| `--policy.gradient_checkpointing=true` | Trade 30% speed for ~40% less VRAM |
+| `train_expert_only=false` | Train both VLM + action expert (not just expert) |
+| `freeze_vision_encoder=false` | Unfreeze SigLIP vision encoder |
+| `gradient_checkpointing=false` | A100 has enough VRAM, no need to trade speed |
+| `optimizer_lr=1e-5` | Lower LR for full model (vs 2.5e-5 for LoRA) |
+| `batch_size=2` | A100 80GB can handle 2-4 |
+| `steps=60000` | ~35% of dataset, sufficient for full fine-tune |
+
+### 4.3 Monitor Training
+
+```bash
+# Watch loss in real-time (training prints every --log_freq steps)
+# Check checkpoint quality:
+python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
+    --model ./outputs/train/ur3_pi0_full/checkpoints/20000/pretrained_model \
+    --ckpt ./outputs/train/ur3_pi0_full/checkpoints/20000/pretrained_model
+```
+
+> Note: for full fine-tune (not LoRA), skip the `merge_lora.py` step. Load checkpoint directly.
 
 ---
 
-## 5. Inference
+## 5. Evaluation
 
-**Data flow (no MoveIt needed — Pi0 outputs go directly to the controller):**
+### 5.1 Dataset Accuracy (MAE)
 
+```bash
+conda activate pi0-env
+
+# For LoRA models (need to merge first):
+python src/ur_simulation_gz/ur_simulation_gz/scripts/merge_lora.py \
+    --base ./ai-models/pi0_libero_base \
+    --lora ./outputs/train/ur3_pi0_lora/checkpoints/040000/pretrained_model \
+    --output ./ai-models/ur3_pi0_lora_merged
+
+python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
+    --model ./ai-models/ur3_pi0_lora_merged \
+    --ckpt ./outputs/train/ur3_pi0_lora/checkpoints/040000/pretrained_model
+
+# For full fine-tune models (use checkpoint directly):
+python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
+    --model ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model \
+    --ckpt ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model
 ```
-Gazebo → /joint_states → ros_side.py → /tmp/joint_state.txt → pi0_inference.py
-Gazebo → /camera/image_raw → ros_side.py → /tmp/camera{0,1}.npy → pi0_inference.py
-Pi0 action → /tmp/ur3_action.txt → ros_side.py → FollowJointTrajectory → UR3
-```
 
-### Terminal 1: Gazebo
+MAE interpretation:
+- **< 0.10 rad**: Excellent, ready for Gazebo
+- **0.10–0.20 rad**: Good, may work in Gazebo
+- **> 0.30 rad**: Needs more training
 
+### 5.2 Gazebo Test
+
+**Terminal 1 — Gazebo:**
 ```bash
 cd ~/ur3_ft300_ws && source install/setup.bash
 ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py
 ```
 
-### Terminal 2: ROS Bridge
-
+**Terminal 2 — ROS Bridge (with spawn):**
 ```bash
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_ros_side.py
+/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_ros_side.py --spawn
 ```
 
-### Terminal 3: Pi0 Inference
-
+**Terminal 3 — Pi0 Inference:**
 ```bash
 conda activate pi0-env
 
-# GPU (recommended, ~7.5 GB VRAM):
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py --mode bf16 --hz 5
+# LoRA merged model:
+python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py \
+    --model ./ai-models/ur3_pi0_lora_merged --mode bf16 --hz 10
 
-# CPU fallback:
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py --mode cpu --hz 2
+# Full fine-tune model:
+python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py \
+    --model ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model --mode bf16 --hz 10
+```
+
+### 5.3 Data Flow
+
+```
+Gazebo → /joint_states → ros_side.py → /tmp/ur3_joint_state.txt → pi0_inference.py
+Gazebo → /camera/image_raw → ros_side.py → /tmp/ur3_camera{0,1}.npy → pi0_inference.py
+Pi0 action → /tmp/ur3_action.txt → ros_side.py → FollowJointTrajectory → UR3
 ```
 
 ---
@@ -262,18 +331,20 @@ python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py --mode
 | `make_video.py` | 3.10 (system) | Generate video from recorded data |
 | `visualize_dataset.py` | 3.10 (system) | Static joint trajectory charts |
 | `compute_ik.py` | 3.10 (system) | Compute IK for new waypoints |
+| `ur3_pi0_inference.py` | pi0-env | Pi0 inference loop (w/ state machine, EMA, atomic write) |
+| `ur3_pi0_ros_side.py` | 3.10 (system) | ROS ↔ /tmp/ bridge, block/bowl spawn |
+| `merge_lora.py` | pi0-env | Offline merge LoRA adapter → single safetensors |
+| `eval_lora_model.py` | pi0-env | Dataset prediction MAE evaluation |
 | `fix_checkpoint_keys.py` | pi0-env | Fix safetensors key mismatches |
-| `ur3_pi0_inference.py` | pi0-env | Pi0 inference loop |
-| `ur3_pi0_ros_side.py` | 3.10 (system) | ROS ↔ /tmp/ bridge for inference |
-| `ur3_pi0_test.py` | pi0-env | Single-shot inference test |
 
 ---
 
 ## 7. Troubleshooting
 
-- **Controller not responding**: Wait 30s after Gazebo launch for controller spawn delay.
-- **`STATUS_ABORTED` during recording**: Normal for gripper — occurs when it's already at the target position (open at 0.0, close at 0.75). Harmless.
-- **MoveIt service not found**: Make sure `move_group.launch.py` is running *after* Gazebo is fully up.
-- **Tokenizer not found**: Ensure `ai-models/paligemma_tokenizer/` contains `tokenizer.json` and `tokenizer.model`.
-- **OOM during training**: Reduce `--batch_size=1`, enable `--policy.gradient_checkpointing=true`, use `--policy.dtype=bfloat16`.
-- **Gripper doesn't fully close**: With block in hand, gripper physically stops at ~0.45. The inference state machine uses time-based freeze to handle this.
+- **Controller not responding**: Wait 30s after Gazebo launch for controller spawn.
+- **OOM during training (5080)**: Reduce `--batch_size=1`, enable `--policy.gradient_checkpointing=true`, use `--policy.dtype=bfloat16`.
+- **OOM during model loading**: Script uses `init_empty_weights()` + `to_empty()`. If it still OOMs, reduce system memory usage.
+- **Model predicts wrong actions**: Check that `empty_cameras=0` in inference (matches training). Verify normalizer stats are from the correct checkpoint.
+- **Gripper state machine cycles**: Normal — model needs to see the block in camera to guide approach. If MAE > 0.3, model isn't accurate enough yet.
+- **Tokenizer not found**: Ensure `ai-models/paligemma_tokenizer/` contains tokenizer files.
+- **Network unreachable for HF**: Use `export HF_ENDPOINT=https://hf-mirror.com` for China mirror, or download models via browser and scp to server.

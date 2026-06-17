@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-UR3 Pi0 推理端 — Conda pi0-env 环境运行
+UR3 Pi0 LoRA 推理端 — Conda pi0-env 环境运行
 
 循环读取 /tmp/ 中的观测数据，运行 Pi0 推理，输出动作到 /tmp/ur3_action.txt。
 
 用法:
   source /home/ubuntu/miniconda3/etc/profile.d/conda.sh && conda activate pi0-env
-  python3 ur3_pi0_inference.py                # CPU 模式
-  python3 ur3_pi0_inference.py --mode bf16    # GPU bfloat16 (推荐, ~7GB)
-  python3 ur3_pi0_inference.py --mode bf16 --hz 5  # 5 Hz 推理
+  python3 ur3_pi0_inference.py --mode bf16 --hz 10
 """
 
-import os, sys, json, time, argparse, gc
+import os, sys, json, time, argparse, gc, tempfile
 import numpy as np
 import torch
 from pathlib import Path
 
+from accelerate import init_empty_weights
 from safetensors.torch import load_file
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.utils.constants import OBS_LANGUAGE_TOKENS, OBS_LANGUAGE_ATTENTION_MASK
@@ -23,21 +22,14 @@ from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from transformers import AutoTokenizer
 
-# ── 配置 ──
-MODEL_DIR = Path("/home/ubuntu/ur3_ft300_ws/outputs/train/pi0_ur3_v3/checkpoints/last/pretrained_model")
+# ── 路径配置 ──
+MODEL_DIR = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_lora_merged")
+CKPT_DIR  = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_lora/checkpoints/005000/pretrained_model")
 JOINT_STATE_FILE = "/tmp/ur3_joint_state.txt"
 ACTION_FILE = "/tmp/ur3_action.txt"
 CAMERA0_FILE = "/tmp/ur3_camera0.npy"
 CAMERA1_FILE = "/tmp/ur3_camera1.npy"
 IMG_SIZE = (224, 224)
-
-# 7D 关节归一化参数（从 checkpoint preprocessor/postprocessor 提取）
-# State 归一化 → 来自 policy_preprocessor_step_5_normalizer_processor.safetensors
-STATE_MEAN  = np.array([-0.98096776, -1.8261101,  -1.0006496,  -1.4776422,   1.1784788,   0.30134782,  0.28109705], dtype=np.float32)
-STATE_STD   = np.array([ 0.6413004,   0.1287974,   0.51718795,  0.13342571,  0.58274025,  0.39418843,  0.36008605], dtype=np.float32)
-# Action 反归一化 → 来自 policy_postprocessor_step_0_unnormalizer_processor.safetensors
-ACTION_MEAN = np.array([-0.9810236,  -1.8261198,  -1.0006421,  -1.4797164,   1.1785238,   0.30149975,  0.2857143], dtype=np.float32)
-ACTION_STD  = np.array([ 0.7147818,   0.14523803,  0.5736406,   0.15516822,  0.659141,    0.4443977,   0.36421567], dtype=np.float32)
 
 TASK_PROMPT = "pick up the red cube and place it into the bowl\n"
 
@@ -50,31 +42,77 @@ def gpu_memory_str():
     return f"{a:.2f}GB / {t:.1f}GB"
 
 
+def load_normalizer_stats(ckpt_dir):
+    """从 checkpoint 加载 state 归一化和 action 反归一化参数"""
+    pre_file = None
+    post_file = None
+    for f in ckpt_dir.glob("policy_*step*.safetensors"):
+        name = f.name
+        if "preprocessor" in name and "normalizer" in name:
+            pre_file = f
+        elif "postprocessor" in name and "unnormalizer" in name:
+            post_file = f
+
+    if pre_file:
+        pre = load_file(str(pre_file))
+        state_mean = pre["observation.state.mean"].numpy().astype(np.float32)
+        state_std  = pre["observation.state.std"].numpy().astype(np.float32)
+        print(f"  状态归一化: mean={np.array2string(state_mean, precision=3)}")
+        print(f"               std={np.array2string(state_std, precision=3)}")
+    else:
+        print("  WARNING: 未找到 state normalizer，使用 identity")
+        state_mean = np.zeros(7, dtype=np.float32)
+        state_std  = np.ones(7, dtype=np.float32)
+
+    if post_file:
+        post = load_file(str(post_file))
+        action_mean = post["action.mean"].numpy().astype(np.float32)
+        action_std  = post["action.std"].numpy().astype(np.float32)
+        print(f"  动作反归一化: mean={np.array2string(action_mean, precision=3)}")
+        print(f"                 std={np.array2string(action_std, precision=3)}")
+    else:
+        print("  WARNING: 未找到 action unnormalizer，使用 identity")
+        action_mean = np.zeros(7, dtype=np.float32)
+        action_std  = np.ones(7, dtype=np.float32)
+
+    return state_mean, state_std, action_mean, action_std
+
+
 class UR3Pi0Inference:
-    def __init__(self, mode="cpu", hz=5):
+    def __init__(self, mode="cpu", hz=5, model_dir=None):
         self.mode = mode
         self.hz = hz
+        self.model_dir = model_dir or MODEL_DIR
         self.device = "cuda" if mode in ("bf16", "fp32") and torch.cuda.is_available() else "cpu"
         self.dtype = torch.bfloat16 if mode == "bf16" else torch.float32
 
-        print(f"UR3 Pi0 推理端 | 模式={self.mode.upper()} | 频率={hz}Hz | 设备={self.device}")
+        print(f"UR3 Pi0 LoRA 推理 | 模式={self.mode.upper()} | 频率={hz}Hz | 设备={self.device}")
         self.policy = None
         self.tokenizer = None
+        self.state_mean = None
+        self.state_std = None
+        self.action_mean = None
+        self.action_std = None
         self._init_files()
         self._load()
 
     def _init_files(self):
-        for path, default in [(JOINT_STATE_FILE, "0.0 0.0 0.0 0.0 0.0 0.0\n"),
-                               (ACTION_FILE, "0.0 0.0 0.0 0.0 0.0 0.0\n")]:
+        for path, default in [(JOINT_STATE_FILE, "0.0 0.0 0.0 0.0 0.0 0.0 0.0\n"),
+                               (ACTION_FILE, "0.0 0.0 0.0 0.0 0.0 0.0 0.0\n")]:
             if not os.path.exists(path):
                 with open(path, "w") as f:
                     f.write(default)
 
     def _load(self):
-        print(f"加载模型: {MODEL_DIR}")
+        md = self.model_dir
+        print(f"加载模型: {md}")
         t0 = time.time()
 
-        with open(MODEL_DIR / "config.json") as f:
+        # ── 加载 normalizer stats ──
+        self.state_mean, self.state_std, self.action_mean, self.action_std = load_normalizer_stats(CKPT_DIR)
+
+        # ── Config ──
+        with open(md / "config.json") as f:
             raw = json.load(f)
         input_features = {}
         for k, v in raw.get("input_features", {}).items():
@@ -83,23 +121,19 @@ class UR3Pi0Inference:
         for k, v in raw.get("output_features", {}).items():
             output_features[k] = PolicyFeature(type=FeatureType(v["type"]), shape=tuple(v["shape"]))
 
+        # FIX 1: empty_cameras=0 匹配训练配置
         config = PI0Config(
             device="cpu",
             dtype="bfloat16" if self.mode == "bf16" else "float32",
-            empty_cameras=1,
+            empty_cameras=0,
+            num_inference_steps=25,  # 增加去噪步数 10→25，提高精度
             input_features=input_features,
             output_features=output_features,
         )
-        print("  创建模型 (CPU, bf16 → ~7GB)...")
-        self.policy = PI0Policy(config)
-        print(f"  模型创建: {time.time() - t0:.1f}s")
+        config.device = "meta"
 
-        if self.mode == "bf16":
-            weights_path = MODEL_DIR / "model_bf16.safetensors"
-            if not weights_path.exists():
-                weights_path = MODEL_DIR / "model.safetensors"
-        else:
-            weights_path = MODEL_DIR / "model.safetensors"
+        # ── 加载权重 ──
+        weights_path = md / "model.safetensors"
         print(f"  加载权重: {weights_path.name}")
         t1 = time.time()
         sd = load_file(str(weights_path), device="cpu")
@@ -109,18 +143,27 @@ class UR3Pi0Inference:
                     sd[k] = sd[k].to(dtype=torch.bfloat16)
         print(f"  权重加载: {time.time() - t1:.1f}s ({len(sd)} keys)")
 
-        t2 = time.time()
-        self.policy.load_state_dict(sd, strict=False)
-        del sd; gc.collect()
-        print(f"  权重应用: {time.time() - t2:.1f}s")
+        # ── 创建模型 (meta device) ──
+        print("  创建模型 (meta device, 零 CPU 内存)...")
+        with init_empty_weights():
+            self.policy = PI0Policy(config)
+        print(f"  模型创建: {time.time() - t0:.1f}s")
 
+        # ── 注入权重 ──
+        t2 = time.time()
+        print("  注入权重...")
+        self.policy.load_state_dict(sd, strict=False, assign=True)
+        del sd; gc.collect()
+        print(f"  权重注入: {time.time() - t2:.1f}s")
+
+        # ── 物化到 GPU ──
         if self.device == "cuda":
-            print("  移动到 CUDA...")
+            print("  物化到 CUDA (to_empty)...")
             t3 = time.time()
-            self.policy = self.policy.to(device="cuda", dtype=self.dtype)
+            self.policy = self.policy.to_empty(device="cuda")
             gc.collect()
             torch.cuda.empty_cache()
-            print(f"  移动完成: {time.time() - t3:.1f}s | GPU: {gpu_memory_str()}")
+            print(f"  物化完成: {time.time() - t3:.1f}s | GPU: {gpu_memory_str()}")
 
         self.policy.eval()
         torch.set_grad_enabled(False)
@@ -131,44 +174,36 @@ class UR3Pi0Inference:
         print(f"加载 PaliGemma tokenizer ({tokenizer_path})...")
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
-            self._use_random_tokens = False
             print("  Tokenizer 加载成功")
         except Exception as e:
             print(f"  WARNING: {e}，回退随机 token")
             self.tokenizer = None
-            self._use_random_tokens = True
 
         print(f"模型加载完成 ({time.time() - t0:.1f}s) | GPU: {gpu_memory_str()}")
 
     # ── 数据读取 ──
-
     def _read_joint_state(self):
         try:
             with open(JOINT_STATE_FILE, "r") as f:
                 line = f.readline().strip()
                 if line:
                     vals = [float(x) for x in line.split()]
-                    if len(vals) == 6:
-                        vals.append(0.0)  # pad 6→7
+                    if len(vals) == 6: vals.append(0.0)
                     return np.array(vals, dtype=np.float32)
-        except Exception:
-            pass
+        except Exception: pass
         return np.zeros(7, dtype=np.float32)
 
     def _read_image(self, path):
         if path and os.path.exists(path):
             try:
                 img = np.load(path, allow_pickle=False)
-                if img.ndim == 3:
-                    return img.astype(np.float32)
-            except Exception:
-                pass
+                if img.ndim == 3: return img.astype(np.float32)
+            except Exception: pass
         return np.zeros((*IMG_SIZE, 3), dtype=np.float32)
 
-    # ── 批构造 ──
-
     def _build_batch(self, joint_pos, wrist_img, global_img):
-        state_norm = (joint_pos - STATE_MEAN) / (STATE_STD + 1e-8)
+        # 归一化 state
+        state_norm = (joint_pos - self.state_mean) / (self.state_std + 1e-8)
         state_t = torch.from_numpy(state_norm).unsqueeze(0).to(device=self.device, dtype=self.dtype)
 
         def img_tensor(img):
@@ -183,11 +218,11 @@ class UR3Pi0Inference:
             lang_ids = torch.randint(0, 256000, (1, 48), device=self.device)
             lang_mask = torch.ones(1, 48, device=self.device, dtype=torch.bool)
 
+        # FIX 2: 只传 2 个相机 (empty_cameras=0, 匹配训练)
         return {
             "observation.state": state_t,
             "observation.images.camera0": img_tensor(wrist_img),
             "observation.images.camera1": img_tensor(global_img),
-            "observation.images.camera2": torch.zeros(1, 3, *IMG_SIZE, device=self.device, dtype=self.dtype),
             OBS_LANGUAGE_TOKENS: lang_ids,
             OBS_LANGUAGE_ATTENTION_MASK: lang_mask,
         }
@@ -199,39 +234,40 @@ class UR3Pi0Inference:
                     action = self.policy.select_action(batch)
             else:
                 action = self.policy.select_action(batch)
+        # 反归一化
         action_np = action.cpu().float().numpy().flatten()
-        action_unnorm = action_np * ACTION_STD + ACTION_MEAN
-        return action_unnorm[:7]  # 绝对关节位置，不裁剪
+        action_unnorm = action_np * self.action_std + self.action_mean
+        return action_unnorm
 
+    # FIX 3: 原子写入，避免 ROS 端读到不完整的文件
     def _write_action(self, action):
-        with open(ACTION_FILE, "w") as f:
-            f.write(" ".join(f"{a:.6f}" for a in action[:7]) + "\n")
+        fd, tmp = tempfile.mkstemp(dir="/tmp", prefix="ur3_action_", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(" ".join(f"{a:.6f}" for a in action[:7]) + "\n")
+            os.replace(tmp, ACTION_FILE)  # atomic rename
+        except Exception:
+            os.unlink(tmp)
 
-    # ── 夹爪-机械臂同步状态机（时间控制） ──
-    # 训练数据中夹爪是瞬时跳变（move_gripper 阻塞完成后才录制），但物理夹爪闭合需要时间。
-    # 模型在夹爪闭合过程中就输出下一阶段的关节位置，导致还没夹稳就抬起。
-    # 解决：用时间冻结 —— 夹爪动作开始后 N 秒内机械臂不能动。
-    #
-    # 状态转换:
-    #   FREE ──(model grip>0.5)──> CLOSING  冻结机械臂，夹爪→0.75，计时 2 秒
-    #   CLOSING ──(2秒到)──> HOLDING        解除冻结，夹爪锁 0.75
-    #   HOLDING ──(model grip<0.1)──> OPENING 冻结机械臂，夹爪→0.0，计时 2 秒
-    #   OPENING ──(2秒到)──> FREE
-
-    GRIP_CLOSE_THRESHOLD = 0.5      # model action > 此值 → 开始闭合
-    GRIP_OPEN_THRESHOLD = 0.1       # model action < 此值 → 开始打开
-    GRIP_FREEZE_TIME_CLOSE = 5.0    # 闭合时冻结机械臂的秒数
-    GRIP_FREEZE_TIME_OPEN = 5.0     # 打开时冻结机械臂的秒数
+    # ── FIX 4: 夹爪状态机优化 ──
+    # 减少冻结时间 (5s → 2s)，增加启动预热期让机械臂先移动
+    GRIP_CLOSE_THRESHOLD = 0.5
+    GRIP_OPEN_THRESHOLD = 0.1
+    GRIP_FREEZE_TIME_CLOSE = 2.0   # 从 5s 减到 2s
+    GRIP_FREEZE_TIME_OPEN = 2.0    # 从 5s 减到 2s
+    WARMUP_STEPS = 30              # 前 30 步 (3s @10Hz) 不禁用状态机，但用 EMA 平滑
 
     def run(self):
         period = 1.0 / self.hz
         print(f"推理循环启动 ({self.hz} Hz)...")
         step = 0
+        grip_state = "FREE"
+        frozen_arm = None
+        freeze_until = 0.0
 
-        # 夹爪状态机
-        grip_state = "FREE"         # FREE | CLOSING | HOLDING | OPENING
-        frozen_arm = None           # 冻结时的 6 关节位置
-        freeze_until = 0.0          # 冻结截止时间 (time.monotonic)
+        # FIX 5: 动作 EMA 平滑，减少抖动
+        ema_action = None
+        ema_alpha = 0.3  # 平滑系数 (0=不平滑, 1=完全用历史)
 
         while True:
             try:
@@ -242,55 +278,64 @@ class UR3Pi0Inference:
                 global_img = self._read_image(CAMERA1_FILE)
 
                 batch = self._build_batch(joint_pos, wrist_img, global_img)
-                action = self._infer(batch)
+                raw_action = self._infer(batch)
 
-                raw_grip_action = action[6]
-                actual_grip = joint_pos[6]
+                # ── EMA 平滑 ──
+                if ema_action is None:
+                    ema_action = raw_action.copy()
+                else:
+                    ema_action = ema_alpha * ema_action + (1 - ema_alpha) * raw_action
+                action = ema_action.copy()
 
-                # ── 状态机 ──
-                if grip_state == "FREE":
-                    if raw_grip_action > self.GRIP_CLOSE_THRESHOLD:
-                        grip_state = "CLOSING"
-                        frozen_arm = joint_pos[:6].copy()
-                        freeze_until = now + self.GRIP_FREEZE_TIME_CLOSE
-                        print(f"  [step {step}] FREE → CLOSING (arm frozen {self.GRIP_FREEZE_TIME_CLOSE}s, grip→0.75)")
+                # ── 启动预热：前 N 步跳过夹爪状态机 ──
+                raw_grip = raw_action[6]
+                in_warmup = step < self.WARMUP_STEPS
 
-                elif grip_state == "CLOSING":
-                    action[:6] = frozen_arm   # 机械臂保持不动
-                    action[6] = 0.75
-                    if now >= freeze_until:
-                        grip_state = "HOLDING"
-                        frozen_arm = None
-                        print(f"  [step {step}] CLOSING → HOLDING (timer done, arm released)")
+                if not in_warmup:
+                    if grip_state == "FREE":
+                        if raw_grip > self.GRIP_CLOSE_THRESHOLD:
+                            grip_state = "CLOSING"
+                            frozen_arm = joint_pos[:6].copy()
+                            freeze_until = now + self.GRIP_FREEZE_TIME_CLOSE
+                            print(f"  [step {step}] FREE -> CLOSING (arm frozen {self.GRIP_FREEZE_TIME_CLOSE}s)")
 
-                elif grip_state == "HOLDING":
-                    action[6] = 0.75          # 强制保持闭合
-                    if raw_grip_action < self.GRIP_OPEN_THRESHOLD:
-                        grip_state = "OPENING"
-                        frozen_arm = joint_pos[:6].copy()
-                        freeze_until = now + self.GRIP_FREEZE_TIME_OPEN
-                        print(f"  [step {step}] HOLDING → OPENING (arm frozen {self.GRIP_FREEZE_TIME_OPEN}s, grip→0.0)")
+                    elif grip_state == "CLOSING":
+                        action[:6] = frozen_arm
+                        action[6] = 0.75
+                        if now >= freeze_until:
+                            grip_state = "HOLDING"
+                            frozen_arm = None
+                            print(f"  [step {step}] CLOSING -> HOLDING")
 
-                elif grip_state == "OPENING":
-                    action[:6] = frozen_arm   # 机械臂保持不动
-                    action[6] = 0.0
-                    if now >= freeze_until:
-                        grip_state = "FREE"
-                        frozen_arm = None
-                        print(f"  [step {step}] OPENING → FREE (timer done, arm released)")
+                    elif grip_state == "HOLDING":
+                        action[6] = 0.75
+                        if raw_grip < self.GRIP_OPEN_THRESHOLD:
+                            grip_state = "OPENING"
+                            frozen_arm = joint_pos[:6].copy()
+                            freeze_until = now + self.GRIP_FREEZE_TIME_OPEN
+                            print(f"  [step {step}] HOLDING -> OPENING (arm frozen {self.GRIP_FREEZE_TIME_OPEN}s)")
+
+                    elif grip_state == "OPENING":
+                        action[:6] = frozen_arm
+                        action[6] = 0.0
+                        if now >= freeze_until:
+                            grip_state = "FREE"
+                            frozen_arm = None
+                            print(f"  [step {step}] OPENING -> FREE")
 
                 self._write_action(action)
 
-                elapsed = (time.time() - t0) * 1000
                 step += 1
                 if step % 10 == 0:
+                    elapsed = (time.time() - t0) * 1000
                     has_w = "Y" if wrist_img.any() else "N"
                     has_g = "Y" if global_img.any() else "N"
-                    grip_state_str = grip_state if grip_state != "FREE" else ""
-                    grip_marker = f" [{grip_state_str}]" if grip_state_str else ""
+                    warmup_marker = " [WARMUP]" if in_warmup else ""
                     frozen_marker = " [FROZEN]" if frozen_arm is not None else ""
+                    grip_marker = f" [{grip_state}]" if grip_state != "FREE" and not in_warmup else ""
                     print(f"  [{step}] {elapsed:.0f}ms | 关节={np.array2string(joint_pos, precision=2)} | "
-                          f"动作={np.array2string(action, precision=3)} | 相机(w/g)={has_w}/{has_g}{grip_marker}{frozen_marker} | {gpu_memory_str()}")
+                          f"动作={np.array2string(action, precision=3)} | 相机(w/g)={has_w}/{has_g}"
+                          f"{warmup_marker}{grip_marker}{frozen_marker} | {gpu_memory_str()}")
 
                 sleep_time = period - (time.time() - t0)
                 if sleep_time > 0:
@@ -305,13 +350,15 @@ class UR3Pi0Inference:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="UR3 Pi0 推理端")
+    parser = argparse.ArgumentParser(description="UR3 Pi0 LoRA 推理端")
     parser.add_argument("--mode", type=str, default="cpu", choices=["cpu", "bf16", "fp32"])
-    parser.add_argument("--hz", type=int, default=5, help="推理频率 (Hz, 默认 5)")
-    parser.add_argument("--warmup", type=int, default=1, help="预热推理次数")
+    parser.add_argument("--hz", type=int, default=5)
+    parser.add_argument("--model", type=str, default=None, help="模型路径覆盖")
+    parser.add_argument("--warmup", type=int, default=1)
     args = parser.parse_args()
 
-    engine = UR3Pi0Inference(mode=args.mode, hz=args.hz)
+    model_dir = Path(args.model) if args.model else MODEL_DIR
+    engine = UR3Pi0Inference(mode=args.mode, hz=args.hz, model_dir=model_dir)
 
     if args.warmup > 0 and engine.device == "cuda":
         print(f"\nGPU 预热 ({args.warmup} 次)...")
