@@ -25,7 +25,7 @@ Thumbs.db
 
 # Model weights (too large for git)
 ai-models/lerobot/pi0/*.safetensors
-ai-models/pi0_libero_base/*.safetensors
+ai-models/lerobot/pi0_libero_base/*.safetensors
 ai-models/ur3_pi0_lora*/
 ai-models/ur3_pi0_*_merged/
 outputs/
