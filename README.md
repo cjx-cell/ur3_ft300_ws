@@ -31,7 +31,9 @@ vision-language-action model** for "pick up the red cube and place it into the b
 ~/ur3_ft300_ws/
 ├── src/ur_simulation_gz/       # Simulation package + all scripts
 ├── ai-models/
-│   ├── pi0_libero_base/         # Pi0 fine-tuned on LIBERO (starting point)
+│   ├── lerobot/
+│   │   ├── pi0/                # Original Pi0 base model
+│   │   └── pi0_libero_base/    # Pi0 fine-tuned on LIBERO (starting point)
 │   ├── paligemma_tokenizer/     # PaliGemma tokenizer
 │   ├── ur3_pick_place_raw/      # Recorded trajectory data (.npz)
 │   └── ur3_pick_place_lerobot/  # Converted LeRobot dataset
@@ -87,7 +89,7 @@ conda activate pi0-env
 python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download('lerobot/pi0_libero_base',
-                   local_dir='./ai-models/pi0_libero_base')
+                   local_dir='./ai-models/lerobot/pi0_libero_base')
 "
 ```
 
@@ -197,7 +199,7 @@ For quick experiments on a 5080 GPU. LoRA adapts Q/V attention in both VLM and a
 conda activate pi0-env
 
 /home/ubuntu/miniconda3/envs/pi0-env/bin/python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/pi0_libero_base \
+  --policy.path=./ai-models/lerobot/pi0_libero_base \
   --dataset.repo_id=cjx-cell/ur3_pick_place \
   --policy.dtype=bfloat16 \
   --policy.device=cuda \
@@ -208,7 +210,8 @@ conda activate pi0-env
   --tolerance_s=0.001 \
   --output_dir=./outputs/train/ur3_pi0_lora \
   --save_freq=20000 \
-  --log_freq=100
+  --log_freq=100 \
+  --rename_map '{"observation.images.camera0": "observation.images.image", "observation.images.camera1": "observation.images.image2"}'
 ```
 
 ### 4.2 Full Fine-tune (A100, Remote Server)
@@ -219,20 +222,21 @@ Full model training on A100. All 2.3B parameters updated — VLM learns Gazebo v
 conda activate pi0-env
 
 python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/pi0_libero_base \
+  --policy.path=./ai-models/lerobot/pi0_libero_base \
   --dataset.repo_id=cjx-cell/ur3_pick_place \
   --policy.dtype=bfloat16 \
   --policy.device=cuda \
   --policy.train_expert_only=false \
   --policy.freeze_vision_encoder=false \
-  --policy.gradient_checkpointing=false \
+  --policy.n_action_steps=50 \
   --policy.optimizer_lr=1e-5 \
   --batch_size=2 \
   --steps=60000 \
   --tolerance_s=0.001 \
   --output_dir=./outputs/train/ur3_pi0_full \
   --save_freq=10000 \
-  --log_freq=50
+  --log_freq=50 \
+  --rename_map '{"observation.images.camera0": "observation.images.image", "observation.images.camera1": "observation.images.image2"}'
 ```
 
 | Flag | Effect |
@@ -267,7 +271,7 @@ conda activate pi0-env
 
 # For LoRA models (need to merge first):
 python src/ur_simulation_gz/ur_simulation_gz/scripts/merge_lora.py \
-    --base ./ai-models/pi0_libero_base \
+    --base ./ai-models/lerobot/pi0_libero_base \
     --lora ./outputs/train/ur3_pi0_lora/checkpoints/040000/pretrained_model \
     --output ./ai-models/ur3_pi0_lora_merged
 
