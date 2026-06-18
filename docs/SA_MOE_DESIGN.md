@@ -1,197 +1,139 @@
 # SA-MOE (Stage-Aware Mixture of Experts) 方案文档
 
-> 版本：v4 — Transformer Encoder 中间融合层 | 状态：代码已实现，待训练验证
+> 版本：v6 — 最终架构 | E_VL 输入 + 条件 token 注入
 
-## 1. 方案定位
-
-面向**在轨装配/在轨服务**（物理本质 = 轴孔装配 peg-in-hole），在 Pi0 VLA 模型基础上
-集成力觉模态 + 阶段感知稀疏混合专家，实现「非接触视觉主导、接触力觉主导」的自适应
-多模态决策。
-
-SA-MOE 作为 **VLM 感知与动作专家之间的中间融合层**，只处理三种感知模态：
+## 1. 数据流
 
 ```
-                             VLM (感知，冻结)               SA-MOE (融合，可训练)         动作专家 (执行，冻结)
+══════════════════════════════════════════════════════════════════
+                    SA-MOE v6 — 完整数据流
+══════════════════════════════════════════════════════════════════
 
-   图像 ──► SigLIP ────► image_patches ──► PaliGemma KV ─────────────────────────┐
-          │                                                                      │
-          └──► mean pool ► Zv ──────────────────────┐                             │
-   文本 ──► Embed ──► lang_tokens ──► PaliGemma KV ─┤                             │
-          │                                         │                             │
-          └──► mean pool ► Zt ────────────────────┐ │                             │
-   力   ──► ForceEncoder ─► Zf ─────────────────┐ │ │                             │
-                                                  │ │ │                             │
-                                         ┌────────▼─▼─▼──────────┐                  │
-                                         │  Transformer Encoder   │                  │
-                                         │  (2层自注意力)          │                  │
-                                         │       ↓               │                  │
-                                         │  StageGate → stage    │                  │
-                                         │  Expert[stage]         │                  │
-                                         │  ModalGate → αv, αf   │                  │
-                                         │  Fusion               │                  │
-                                         └───────────┬───────────┘                  │
-                                                     │ G_sa_moe                    │
-   状态 ──► state_proj ─────────────────────────────┐ │                             │
-   噪声 ──► action_in_proj ─────────────────────────┤ │                             │
-                                                     │ │                             │
-                                            ┌────────▼─▼──────────┐                  │
-                                            │  Gemma Expert 300M  │                  │
-                                            │  + G_sa_moe 残差     │                  │
-                                            │  cross-attn to KV ──┘                  │
-                                            └─────────┬──────────┘
-                                                      ▼
-                                                    动作 v_t
+  图像+文本 → PaliGemma 18层 → E_VL [B, 560, 2048]
+                                       │
+                               ┌───────┴────────┐
+                               │                │
+                               ▼                ▼
+                          KV cache        SA-MOE(E_VL, force)
+                       (主通路,完全不改)         │
+                               │         ┌─────┴──────┐
+                               │         │ Transformer │  2层自注意力
+                               │         │ StageGate   │  阶段分类
+                               │         │ Expert      │  阶段特化
+                               │         │ ModalGate   │  模态权重
+                               │         │ Fusion      │  显式加权
+                               │         └─────┬──────┘
+                               │               │
+                               │        G_sa_moe [B, 1, 1024]
+                               │               │
+                    state ──────┤               │
+                    noise ──────┤               │
+                               │               │
+                               ▼               ▼
+                    ┌──────────────────────────────────┐
+                    │  Suffix = [G_sa_moe  ← 条件token │
+                    │           | state_token           │
+                    │           | actions×50            │
+                    │           | time_token]           │
+                    └──────────────┬───────────────────┘
+                                   │
+                           Gemma Expert 300M
+                           (每层 cross-attn → KV cache)
+                           (每层 self-attn → G_sa_moe)
+                                   │
+                           action_out_proj → v_t
 ```
 
 ## 2. 模块清单
 
-### 感知层（冻结，Pi0 预训练）
+### SA-MOE 核心（全部可训练，~55M）
 
-| 模块 | 输入 | 输出 | 作用 |
-|------|------|------|------|
-| SigLIP | 图像 [B,3,224,224]×2 | image_patches [B,512,2048] | 视觉特征提取 |
-| PaliGemma Embed | 文本 token [B,48] | lang_tokens [B,48,2048] | 语言理解 |
-| state_proj | 状态 [B,7]→pad[32] | [B,1024] | 状态编码（直接进后缀） |
+| # | 模块 | 维度 | 作用 |
+|---|------|------|------|
+| 1 | ForceEncoder | [B,6]→[B,1024] | 力/力矩编码 |
+| 2 | force_to_vlm | [B,1024]→[B,2048] | 力 token 投影到 VLM 维度 |
+| 3 | **Transformer Encoder** | [B, N+1, 2048] | 2层自注意力，E_VL + force token 交互 |
+| 4 | vlm_to_sa_moe | [B,2048]→[B,1024] | 池化后投影回 SA-MOE 维度 |
+| 5 | StageGate | Zv+Zf→[B,4] | 阶段分类（接近/对准/插入/拧紧） |
+| 6 | ExpertLibrary | [B,3072]→[B,1024] | 4 个阶段专属 MLP 专家 |
+| 7 | ModalGate | [B,4+1024]→[B,2] | 模态权重 αv, βf |
+| 8 | ModalityWeightedFusion | [B,2048]→[B,1024] | 显式 αv·Zv + βf·Zf |
+| 9 | sa_moe_proj | [B,2048]→[B,1024] | G_sa_moe 条件 token |
 
-### 投影层（可训练）
+### Pi0 组件（冻结）
 
-| 模块 | 输入 | 输出 | 作用 |
-|------|------|------|------|
-| vis_proj | Zv_raw [B,2048] | Zv [B,1024] | 视觉特征降维 |
-| text_to_D | Zt_raw [B,2048] | Zt [B,1024] | 语言特征降维 |
-| ForceEncoder | 力/力矩 [B,6] | Zf [B,1024] | 力觉编码 |
-
-### SA-MOE 核心融合层（全部可训练，~28M）
-
-| 模块 | 位置 | 作用 |
-|------|------|------|
-| **MultimodalTransformerEncoder** | 最前 | 2层自注意力，让 Zv/Zf/Zt 三个感知 token 互相交互。Zv 获得力觉上下文，Zf 获得视觉上下文 |
-| **StageGate** | Transformer 之后 | 基于 refined Zv'+Zf' 判断当前装配阶段（接近/对准/插入/拧紧），输出 stage_probs + expert_idx |
-| **ExpertLibrary** | StageGate 之后 | 4 个阶段专属 MLP 专家。同一输入 `[Zv',Zf',Zt']`，不同专家提取不同特征——expert[0]专注空间接近度，expert[3]专注力矩柔顺 |
-| **ModalGate** | Expert 之后 | 基于 stage_probs + Z_expert 输出 αv, αf。决定当前信视觉还是力觉。含 stage_prior_bias 物理先验 |
-| **ModalityWeightedFusion** | 最末 | **显式执行** αv·Zv + βf·Zf，concat 后投影。α/β 功能性参与特征计算 |
-
-### 注入 + 输出
-
-| 模块 | 作用 |
+| 组件 | 作用 |
 |------|------|
-| sa_moe_proj | concat[Z_fused, Z_expert] → G_sa_moe [B,1024] → expand [B,50,1024] |
-| 注入方式 | **suffix 残差加法**：suffix_out[:, -50:] + G_sa_moe → action_out_proj |
-| force_out_proj | Z_expert → 期望力/力矩 [B,6] |
+| SigLIP | 图像→patch 嵌入 |
+| PaliGemma 2B | 18层处理图像+语言 → E_VL + KV cache |
+| state_proj | 状态 [7]→[1024] |
+| Gemma Expert 300M | 18层 self-attn + cross-attn → 去噪 |
+| action_out_proj | [1024]→[7] 关节速度场 |
 
-## 3. 数据流（训练）
+## 3. 关键设计决策
 
-```
-1. 标准 Pi0 前缀（不动）
-   [img_patches | lang_tokens] → PaliGemma 2B → KV cache
+| 决策 | 原因 |
+|------|------|
+| SA-MOE 输入 E_VL 而非原始 patches | PaliGemma 已处理 18 层，不重复学视觉 |
+| E_VL → KV cache（主通路）\| 池化 → SA-MOE（条件通路） | KV cache 保持 PaliGemma 预训练语义完全不变；SA-MOE 只池化聚合，不修改原始 token |
+| G_sa_moe 作为 suffix 条件 token | 阶段+模态信息贯穿 Gemma Expert 全部 18 层，深层引导而非末端修正 |
+| 1 个全局条件 token 而非 H_action 个逐步 token | 力觉+阶段是全局状态，应由解码器自行学习如何调制各步动作 |
+| 状态不进 SA-MOE | 状态是执行信息，不是感知信息；Pi0 原本就直连动作专家 |
+| E_VL + SA-MOE 一次性计算 | 推理时只算一次，不每去噪步重算 |
 
-2. 特征提取
-   Zv = vis_proj(mean(SigLIP_patches))  [B,1024]  ← 冻结
-   Zf = ForceEncoder(force [B,6])        [B,1024]  ← 可训练
-   Zt = text_to_D(mean(lang_emb))        [B,1024]  ← 冻结
+## 4. 与 ForceVLA 的本质差异
 
-3. Transformer Encoder
-   tokens = stack([Zv, Zf, Zt], dim=1)   [B,3,1024]
-   tokens = TransformerEncoder(tokens)   [B,3,1024]
-   Zv', Zf', Zt' = tokens[:,0], tokens[:,1], tokens[:,2]
+ForceVLA 源码分析确认了以下核心区别：
 
-4. StageGate + Expert
-   stage_probs, expert_idx = StageGate(Zv', Zf')
-   Z_expert = Expert[expert_idx](concat[Zv', Zf', Zt'])  [B,1024]
+| | ForceVLA | SA-MOE v6 |
+|---|---|---|
+| E_VL 来源 | 联合前向 `prefix_out`（已和 suffix 交叉过） | 独立 prefix-only 前向（纯感知，未混入动作） |
+| 力觉注入深度 | **末端修正**：残差加在 `action_out_proj` 之前 | **全层引导**：条件 token 贯穿 Gemma Expert 18 层 |
+| 对 E_VL 的干预 | LIMoE 二次编码全部 VL token，**修改预训练特征** | 只池化聚合，**不修改原始 token 序列** |
+| 融合输出 | `H_action` 个逐步 token（每步一个） | **1 个全局条件 token** |
+| 融合逻辑 | per-token MoE 隐式路由，黑盒 | **StageGate + ModalGate 显式输出**，白盒可解释 |
+| 约束能力 | 无 | **stage_prior_bias + alpha_aux_loss** 可人工干预 |
 
-5. ModalGate + Fusion
-   α, β = ModalGate(stage_probs, Z_expert, expert_idx)
-   Z_fused = Fusion(Zv', Zf', α, β)      [B,1024]
+ForceVLA 是学术验证（力模态+MoE 有效），SA-MOE v6 是工程落地（更深注入+显式可控+保留预训练泛化）。
 
-6. 组装 + 注入
-   G_sa_moe = sa_moe_proj(concat[Z_fused, Z_expert])  [B,1024]
-   G_sa_moe = expand → [B,50,1024]
-
-7. Pi0 后缀 + 残差
-   suffix_out = JointTransformer(Prefix_KV, [state|noise×50])
-   action_tokens = suffix_out[:, -50:] + G_sa_moe
-   v_t = action_out_proj(action_tokens)   [B,50,7]
-```
-
-## 4. 推理数据流
+## 5. 参数统计
 
 ```
-1. Pi0 prefix 编码 → KV cache [一次性]
-2. 样本噪声 x_1 = N(0,I) [B,50,32]
-3. 提取 SA-MOE: tokens → Transformer → Gate → Expert → Fusion → G_sa_moe [B,50,1024]
-4. for step in 0..num_steps-1:
-     suffix_out = Gemma Expert(suffix, cross_attn_to_KV)
-     v_t = action_out_proj(suffix_out[:, -50:] + G_sa_moe)
-     x_t = x_t + dt * v_t
-5. 返回 actions, force_pred, αv, βf, stage_probs
-```
-
-## 5. 损失函数
-
-| 损失 | 公式 | 权重 | 说明 |
-|------|------|------|------|
-| L_action | MSE(v_t, u_t) | 1.0 | Pi0 流匹配主损失 |
-| L_stage | CrossEntropy(stage_probs, pseudo_labels) | 0.2（5K步后激活） | 阶段分类监督 |
-| L_balance | -entropy + underuse_penalty | 0.01 | 防止专家坍塌 |
-| L_alpha | MSE(αv, target_α[expert_idx]) | 0.2 | 引导模态权重符合物理直觉 |
-
-损失权重调度：warmup(0-5K) → main(5K-20K) → finetune(20K+)
-
-## 6. 参数统计
-
-```
-总参数:     ~2.36B
-冻结:       ~2.33B (Pi0 backbone)
-可训练:     ~28M    (1.0%)
+Pi0 backbone (冻结):  ~2.30B
+SA-MOE (可训练):     ~55M    (2.3%)
 
   ForceEncoder                ~2.8M
-  Transformer Encoder (2层)  ~12.6M  ← v4 新增
+  force_to_vlm                ~2.1M
+  Transformer Encoder (2层)  ~33.6M
+  vlm_to_sa_moe               ~2.1M
   StageGate                   ~0.5M
   ExpertLibrary (4个, 3*D)   ~12.6M
   ModalGate                   ~0.3M
   ModalityWeightedFusion      ~2.1M
   sa_moe_proj                 ~2.1M
-  vis/text projections        ~4.2M
 ```
 
-## 7. 文件结构
+## 6. 文件结构
 
 ```
 lerobot/src/lerobot/policies/sa_moe_pi0/
-├── __init__.py                   # 导出 SAMoEPi0Config, SAMoEPi0Policy
-├── configuration_sa_moe_pi0.py   # 配置类（继承 PI0Config）
-├── sa_moe_modules.py             # 所有模块定义
-│   ├── ForceEncoder              # 力/力矩编码器
-│   ├── MultimodalTransformerEncoder  # v4: 自注意力感知融合
-│   ├── StageGate                 # 阶段分类 + Top-1 路由
-│   ├── AtomicSkillExpert         # 单个阶段专家 (3层MLP+残差)
-│   ├── AtomicSkillExpertLibrary  # 4专家 Top-1 调度
-│   ├── ModalGate                 # 模态权重 αv/αf
-│   ├── ModalityWeightedFusion    # 显式 αv·Zv + βf·Zf 融合
-│   └── generate_stage_labels()   # 阶段伪标签生成
-├── modeling_sa_moe_pi0.py        # SAMoEPi0Model + SAMoEPi0Policy
-└── processor_sa_moe_pi0.py       # 预/后处理器
+├── __init__.py
+├── configuration_sa_moe_pi0.py
+├── sa_moe_modules.py
+│   ├── ForceEncoder
+│   ├── MultimodalTransformerEncoder
+│   ├── StageGate
+│   ├── AtomicSkillExpert / ExpertLibrary
+│   ├── ModalGate
+│   ├── ModalityWeightedFusion
+│   └── compute_load_balancing_loss / compute_alpha_aux_loss / generate_stage_labels
+├── modeling_sa_moe_pi0.py
+│   ├── SAMoEPi0Model(PI0Pytorch)
+│   │   ├── _get_vlm_output()       # PaliGemma prefix-forward → E_VL + KV
+│   │   ├── _forward_sa_moe()       # SA-MOE 融合（Transformer→Gate→Expert→Fusion）
+│   │   ├── denoise_step()          # 覆写：G_sa_moe 作为 suffix 条件 token
+│   │   ├── forward()               # 训练：prefix → SA-MOE → suffix+condition
+│   │   └── sample_actions()        # 推理：同上
+│   └── SAMoEPi0Policy(PI0Policy)
+└── processor_sa_moe_pi0.py
 ```
-
-## 8. 与 ForceVLA 对比
-
-| | ForceVLA (NeurIPS 2025) | SA-MOE v4 |
-|---|---|---|
-| 力编码 | Linear [6→2048] | ForceEncoder MLP [6→1024] |
-| 模态交互 | Transformer Encoder (MHA) | **Transformer Encoder (MHA)** |
-| 专家路由 | MoE (4专家, per-token 隐式路由) | **StageGate (4专家, 阶段显式路由)** |
-| 模态权重 | ❌ 无 | **αv/αf 可监控** |
-| 阶段先验 | ❌ 无 | **stage_prior_bias** |
-| 注入点 | Suffix 残差 | Suffix 残差 |
-| 动作生成 | Pi0 flow matching | Pi0 flow matching |
-| 可解释性 | ★ | ★★★ |
-| 物理归纳偏置 | ★★ | ★★★ |
-
-## 9. 各模块在在轨装配场景中的角色
-
-| 阶段 | StageGate | Expert | αv | 行为 |
-|------|-----------|--------|-----|------|
-| 接近 | `[0.9, 0.1, 0, 0]` | expert[0] | ~0.9 | 视觉引导靠近目标，力传感器无读数 |
-| 对准 | `[0.2, 0.7, 0.1, 0]` | expert[1] | ~0.7 | 微调位姿，微弱力反馈 |
-| 插入 | `[0, 0.1, 0.8, 0.1]` | expert[2] | ~0.2 | 力主导柔顺控制 |
-| 拧紧 | `[0, 0, 0.1, 0.9]` | expert[3] | ~0.1 | 完全依赖力觉，大扭矩锁定 |
