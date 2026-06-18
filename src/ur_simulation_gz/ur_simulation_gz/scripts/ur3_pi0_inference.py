@@ -23,8 +23,8 @@ from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from transformers import AutoTokenizer
 
 # ── 路径配置 ──
-MODEL_DIR = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_lora_merged")
-CKPT_DIR  = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_lora/checkpoints/005000/pretrained_model")
+MODEL_DIR = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_full/checkpoints/084000/pretrained_model")
+CKPT_DIR  = Path("/home/ubuntu/ur3_ft300_ws/ai-models/ur3_pi0_full/checkpoints/084000/pretrained_model")
 JOINT_STATE_FILE = "/tmp/ur3_joint_state.txt"
 ACTION_FILE = "/tmp/ur3_action.txt"
 CAMERA0_FILE = "/tmp/ur3_camera0.npy"
@@ -126,7 +126,7 @@ class UR3Pi0Inference:
             device="cpu",
             dtype="bfloat16" if self.mode == "bf16" else "float32",
             empty_cameras=0,
-            num_inference_steps=25,  # 增加去噪步数 10→25，提高精度
+            num_inference_steps=10,  # 与训练配置一致 (config.json num_inference_steps=10)
             input_features=input_features,
             output_features=output_features,
         )
