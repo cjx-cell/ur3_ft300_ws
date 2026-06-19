@@ -20,6 +20,20 @@ target_compile_features(pick_and_place PUBLIC cxx_std_17)
 install(TARGETS pick_and_place
   DESTINATION lib/${PROJECT_NAME})
 
+# ── peg_in_hole C++ demo ──
+add_executable(peg_in_hole src/peg_in_hole.cpp)
+ament_target_dependencies(peg_in_hole
+  rclcpp
+  moveit_ros_planning_interface
+  geometry_msgs
+  shape_msgs
+  moveit_msgs
+  ament_index_cpp
+)
+target_compile_features(peg_in_hole PUBLIC cxx_std_17)
+install(TARGETS peg_in_hole
+  DESTINATION lib/${PROJECT_NAME})
+
 # Default to off as starting gzsim doesn't shut down correctly at the moment
 option(
   UR_SIM_INTEGRATION_TESTS
