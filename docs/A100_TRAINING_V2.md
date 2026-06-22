@@ -36,9 +36,9 @@ git pull origin main
 pip install -e ~/lerobot
 
 python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/lerobot/pi0_libero_base \
+  --policy.path=./ai-models/pi0/pi0_libero_base \
   --dataset.repo_id=local/ur3_pick_place \
-  --dataset.root=./ai-models/ur3_pick_place_lerobot \
+  --dataset.root=./ai-models/datasets/ur3_pick_place_lerobot \
   --policy.dtype=bfloat16 --policy.device=cuda \
   --policy.train_expert_only=false \
   --policy.freeze_vision_encoder=false \
@@ -62,7 +62,7 @@ python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
 
 ## 数据位置
 
-- Base model: `./ai-models/lerobot/pi0_libero_base/`（含 model.safetensors + config.json）
+- Base model: `./ai-models/pi0/pi0_libero_base/`（含 model.safetensors + config.json）
 - 数据集: HuggingFace `cjx-cell/ur3_pick_place`（完整 49 episodes）
 - Tokenizer: `./ai-models/paligemma_tokenizer/`
 - Config 已验证：camera0/camera1, state[7], action[7], empty_cameras=0, n_action_steps=50
