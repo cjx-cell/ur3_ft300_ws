@@ -1,8 +1,9 @@
-# UR3 + FT300 + Robotiq 2F85 — Pi0 Pick-and-Place
+# UR3 + FT300 + Robotiq 2F85 — Pi0 / SA-MOE
 
 Gazebo Fortress simulation of a UR3 collaborative robot with Robotiq FT300 F/T sensor and
-2F-85 adaptive gripper. **Collects pick-and-place trajectory data and fine-tunes a Pi0
-vision-language-action model** for "pick up the red cube and place it into the bowl".
+2F-85 adaptive gripper. Two task pipelines:
+- **Pi0**: "pick up the red cube and place it into the bowl"
+- **SA-MOE**: "pick up the peg and insert it into the hole" (force-aware, stage-aware)
 
 ## Hardware (Simulated)
 
@@ -21,23 +22,64 @@ vision-language-action model** for "pick up the red cube and place it into the b
 | ROS 2 | Humble |
 | Simulation | Gazebo Fortress (DART physics) |
 | Control | `gz_ros2_control` + `joint_trajectory_controller` |
-| Motion planning | MoveIt2 (data collection only) |
-| VLA Model | Pi0 (PaliGemma 2B + Action Expert 300M) |
+| VLA Model (Pick&Place) | Pi0 (PaliGemma 2B + Action Expert 300M) |
+| VLA Model (Peg-in-Hole) | SA-MOE (Stage-Aware Mixture of Experts on Pi0) |
 | Training | LeRobot |
 
 ## Directory Layout
 
 ```
 ~/ur3_ft300_ws/
-├── src/ur_simulation_gz/       # Simulation package + all scripts
 ├── ai-models/
-│   ├── lerobot/
-│   │   ├── pi0/                # Original Pi0 base model
-│   │   └── pi0_libero_base/    # Pi0 fine-tuned on LIBERO (starting point)
-│   ├── paligemma_tokenizer/     # PaliGemma tokenizer
-│   ├── ur3_pick_place_raw/      # Recorded trajectory data (.npz)
-│   └── ur3_pick_place_lerobot/  # Converted LeRobot dataset
-├── outputs/train/               # Fine-tuned checkpoints
+│   ├── pi0/                          # Pi0 model weights
+│   │   ├── pi0_libero_base/          # Pretrained base (6.6GB)
+│   │   ├── pi0_full_v1/              # V1 full fine-tune (84K steps)
+│   │   ├── pi0_full_v2/              # V2 full fine-tune (84K, vision fix)
+│   │   └── pi0_full_v3/              # V3 full fine-tune (135K, 10fps)
+│   ├── samoe/                        # SA-MOE model weights
+│   │   ├── v1/ v2/                   # Early experiments
+│   │   ├── delta_full/               # Delta action 100K
+│   │   └── v7/                       # ForceVLA-style (30K)
+│   ├── datasets/                     # All datasets
+│   │   ├── ur3_pick_place_raw/       # Raw pick-and-place (49 eps, 50fps)
+│   │   ├── ur3_pick_place_lerobot/   # LeRobot format (50fps)
+│   │   ├── ur3_pick_place_10hz_lerobot/  # LeRobot format (10fps, V3)
+│   │   ├── ur3_peg_in_hole_raw/      # Raw peg-in-hole (force + stage labels)
+│   │   └── ur3_peg_in_hole_lerobot/  # LeRobot format
+│   ├── paligemma_tokenizer/          # PaliGemma tokenizer
+│   └── run_train_sa_moe.sh           # SA-MOE training launcher
+├── src/ur_simulation_gz/
+│   └── ur_simulation_gz/
+│       ├── launch/ur3_ft300_robotiq.launch.py  # Gazebo launch
+│       ├── src/
+│       │   ├── pick_and_place.cpp    # C++ pick-and-place controller
+│       │   └── peg_in_hole.cpp       # C++ peg-in-hole controller (force + stage)
+│       └── scripts/
+│           ├── pick_and_place/       # Pi0 pick-and-place scripts
+│           │   ├── ur3_pi0_pick_place_record.py              # Data recording
+│           │   ├── ur3_pi0_pick_place_make_video.py          # Visualization
+│           │   ├── ur3_pi0_pick_place_convert_to_lerobot.py  # npz → LeRobot
+│           │   ├── ur3_pi0_pick_place_ros_side.py            # ROS bridge
+│           │   ├── ur3_pi0_pick_place_inference.py           # Pi0 inference
+│           │   ├── ur3_pi0_pick_place_eval_offline.py        # Offline eval
+│           │   ├── ur3_pi0_pick_place_eval_lora.py           # LoRA eval
+│           │   ├── ur3_pi0_pick_place_compute_ik.py          # IK solver
+│           │   ├── ur3_pi0_pick_place_merge_lora.py          # LoRA merge
+│           │   └── ur3_pi0_pick_place_fix_checkpoint_keys.py # Key fixer
+│           └── peg_in_hole/          # SA-MOE peg-in-hole scripts
+│               ├── ur3_samoe_peg_in_hole_record.py           # Data recording
+│               ├── ur3_samoe_peg_in_hole_make_video.py       # Visualization
+│               ├── ur3_samoe_peg_in_hole_convert_to_lerobot.py # npz → LeRobot
+│               ├── ur3_samoe_peg_in_hole_inference.py        # SA-MOE inference
+│               └── ur3_samoe_peg_in_hole_ros_side.py         # ROS bridge
+├── docs/                           # Training guides & design docs
+│   ├── A100_RETRAIN.md
+│   ├── A100_TRAINING_V2.md
+│   ├── A100_V3_TRAINING_GUIDE.md
+│   └── SA_MOE_DESIGN.md
+├── PROJECT_REFERENCE.md            # Complete project reference
+├── PI0_TRAINING_ANALYSIS.md        # Pi0 V1/V2 analysis
+├── SA_MOE_CHANGELOG.md             # SA-MOE version history
 └── README.md
 ```
 
@@ -50,7 +92,6 @@ vision-language-action model** for "pick up the red cube and place it into the b
 ```bash
 sudo apt install ros-humble-ros-gz ros-humble-moveit ros-humble-ros2-control \
                  ros-humble-cv-bridge ros-humble-rqt-image-view
-pip install pymoveit2
 ```
 
 ### 1.2 Clone Repos
@@ -80,24 +121,17 @@ source install/setup.bash
 
 ### 1.5 Model Weights
 
-Download the **Pi0 Libero base model** (VLM already fine-tuned on 130+ robot manipulation tasks):
-
 ```bash
-# From HuggingFace (with mirror for China):
+# Pi0 base model (HuggingFace)
 export HF_ENDPOINT=https://hf-mirror.com
 conda activate pi0-env
 python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download('lerobot/pi0_libero_base',
-                   local_dir='./ai-models/lerobot/pi0_libero_base')
+                   local_dir='./ai-models/pi0/pi0_libero_base')
 "
-```
 
-Also copy the PaliGemma tokenizer:
-
-```bash
-# Tokenizer (from original Pi0 or download from HuggingFace):
-# Place tokenizer.json and tokenizer.model in:
+# PaliGemma tokenizer — copy tokenizer files to:
 #   ai-models/paligemma_tokenizer/
 ```
 
@@ -105,63 +139,54 @@ Also copy the PaliGemma tokenizer:
 
 ## 2. Launch Simulation
 
-**Terminal 1 — Gazebo:**
-
 ```bash
 cd ~/ur3_ft300_ws
 source install/setup.bash
 ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py
 
-# Headless (no GUI):
+# Headless:
 ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py gazebo_gui:=false
 ```
-
-Wait ~30 seconds for controllers to start.
 
 ---
 
 ## 3. Data Collection
 
-### 3.1 Start MoveIt
-
-**Terminal 2:**
+### 3.1 Pick-and-Place (Pi0)
 
 ```bash
-cd ~/ur3_ft300_ws
-source install/setup.bash
-ros2 launch ur3_ft300_moveit_config move_group.launch.py
+# Gazebo must be running first
+/usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_record.py \
+    --episodes 50
 ```
 
-### 3.2 Record Episodes
+The script automatically: spawns block + bowl → runs C++ `pick_and_place` → records at 50Hz → saves `.npz`.
+
+Output: `ai-models/datasets/ur3_pick_place_raw/`
+
+### 3.2 Peg-in-Hole (SA-MOE)
 
 ```bash
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_record_pick_place.py \
-    --episodes 10
+/usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_record.py \
+    --episodes 50
 ```
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--episodes` | 1 | Number of episodes to record |
-| `--output` | `ai-models/ur3_pick_place_raw` | Output directory |
+Records at 10Hz with force/torque data + stage labels (0=approach, 1=align, 2=grasp, 3=insert, 4=confirm).
 
-Each episode saves as `<task>_episode_XXXX/<status>/data.npz`:
-- `state`: (N, 7) joint positions from `/joint_states`
-- `action`: (N, 7) next state = absolute joint positions
-- `camera0`: (N, 224, 224, 3) wrist camera
-- `camera1`: (N, 224, 224, 3) global camera
-- `task`: language instruction
+Output: `ai-models/datasets/ur3_peg_in_hole_raw/`
 
 ### 3.3 Visualize Recordings
 
 ```bash
-# Generate videos (all episodes):
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/make_video.py
+conda activate pi0-env
 
-# Single episode:
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/make_video.py --episode 0
+# Pick-and-place
+python src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_make_video.py \
+    --input ai-models/datasets/ur3_pick_place_raw --episode 0
 
-# Watch:
-mpv ai-models/ur3_pick_place_raw/trajectory_viz/episode_0000.mp4
+# Peg-in-hole
+python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_make_video.py \
+    --input ai-models/datasets/ur3_peg_in_hole_raw --episode 0
 ```
 
 ### 3.4 Convert to LeRobot Format
@@ -169,128 +194,56 @@ mpv ai-models/ur3_pick_place_raw/trajectory_viz/episode_0000.mp4
 ```bash
 conda activate pi0-env
 
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_convert_to_lerobot.py \
-    --input ai-models/ur3_pick_place_raw
+# Pick-and-place (10fps)
+python src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_convert_to_lerobot.py \
+    --input ai-models/datasets/ur3_pick_place_raw \
+    --repo_id local/ur3_pick_place_10hz \
+    --fps 10 --source_fps 50
 
-# Push to HuggingFace Hub:
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_convert_to_lerobot.py \
-    --input ai-models/ur3_pick_place_raw \
-    --push_to_hub
+# Peg-in-hole
+python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_convert_to_lerobot.py \
+    --input ai-models/datasets/ur3_peg_in_hole_raw \
+    --repo_id local/ur3_peg_in_hole
 ```
 
 ---
 
 ## 4. Training
 
-### Strategy Comparison
-
-| Strategy | GPU | VRAM | Trainable Params | Best For |
-|----------|-----|------|-----------------|----------|
-| LoRA rank=16 | RTX 5080 16GB | ~9 GB | ~48M | Quick experiments |
-| LoRA rank=16 (VLM+Expert) | RTX 5080 16GB | ~10 GB | ~48M | Better visual adaptation |
-| Full Expert Only | RTX 5080 16GB | ~12 GB | ~300M | Max capacity, frozen VLM |
-| **Full Fine-tune** | **A100 40/80GB** | **~35 GB** | **~2.3B** | **Best quality** |
-
-### 4.1 LoRA Fine-tuning (RTX 5080, Local)
-
-For quick experiments on a 5080 GPU. LoRA adapts Q/V attention in both VLM and action expert.
+### 4.1 Pi0 Full Fine-tune (A100)
 
 ```bash
-conda activate pi0-env
-
-/home/ubuntu/miniconda3/envs/pi0-env/bin/python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/lerobot/pi0_libero_base \
-  --dataset.repo_id=cjx-cell/ur3_pick_place \
-  --policy.dtype=bfloat16 \
-  --policy.device=cuda \
-  --policy.gradient_checkpointing=true \
-  --batch_size=1 \
-  --steps=40000 \
-  --peft.r=16 \
-  --tolerance_s=0.001 \
-  --output_dir=./outputs/train/ur3_pi0_lora \
-  --save_freq=20000 \
-  --log_freq=100 \
-  --rename_map '{"observation.images.camera0": "observation.images.image", "observation.images.camera1": "observation.images.image2"}'
-```
-
-### 4.2 Full Fine-tune (A100, Remote Server)
-
-Full model training on A100. All 2.3B parameters updated — VLM learns Gazebo visual features from scratch.
-
-```bash
-conda activate pi0-env
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate pi0-env
 
 python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/lerobot/pi0_libero_base \
-  --dataset.repo_id=cjx-cell/ur3_pick_place \
-  --policy.dtype=bfloat16 \
-  --policy.device=cuda \
-  --policy.train_expert_only=false \
-  --policy.freeze_vision_encoder=false \
-  --policy.n_action_steps=50 \
-  --policy.optimizer_lr=1e-5 \
-  --batch_size=2 \
-  --steps=60000 \
-  --tolerance_s=0.001 \
-  --output_dir=./outputs/train/ur3_pi0_full \
-  --save_freq=10000 \
-  --log_freq=50 \
-  --rename_map '{"observation.images.camera0": "observation.images.image", "observation.images.camera1": "observation.images.image2"}'
+    --policy.path=lerobot/pi0 \
+    --policy.pretrained_path=ai-models/pi0/pi0_libero_base \
+    --policy.num_inference_steps=50 \
+    --policy.dtype=bfloat16 --policy.device=cuda \
+    --policy.freeze_vision_encoder=false \
+    --policy.train_expert_only=false \
+    --dataset.repo_id=local/ur3_pick_place_10hz \
+    --dataset.root=ai-models/datasets/ur3_pick_place_10hz_lerobot \
+    --batch_size=2 --steps=135000 \
+    --output_dir=outputs/train/ur3_pi0_v4
 ```
 
-| Flag | Effect |
-|------|--------|
-| `train_expert_only=false` | Train both VLM + action expert (not just expert) |
-| `freeze_vision_encoder=false` | Unfreeze SigLIP vision encoder |
-| `gradient_checkpointing=false` | A100 has enough VRAM, no need to trade speed |
-| `optimizer_lr=1e-5` | Lower LR for full model (vs 2.5e-5 for LoRA) |
-| `batch_size=2` | A100 80GB can handle 2-4 |
-| `steps=60000` | ~35% of dataset, sufficient for full fine-tune |
+> See [docs/A100_V3_TRAINING_GUIDE.md](docs/A100_V3_TRAINING_GUIDE.md) for full A100 training guide.
 
-### 4.3 Monitor Training
+### 4.2 SA-MOE Training
 
 ```bash
-# Watch loss in real-time (training prints every --log_freq steps)
-# Check checkpoint quality:
-python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
-    --model ./outputs/train/ur3_pi0_full/checkpoints/20000/pretrained_model \
-    --ckpt ./outputs/train/ur3_pi0_full/checkpoints/20000/pretrained_model
+conda activate pi0-env
+# See ai-models/run_train_sa_moe.sh for config
 ```
 
-> Note: for full fine-tune (not LoRA), skip the `merge_lora.py` step. Load checkpoint directly.
+See [SA_MOE_CHANGELOG.md](SA_MOE_CHANGELOG.md) for version history.
 
 ---
 
-## 5. Evaluation
+## 5. Gazebo Test
 
-### 5.1 Dataset Accuracy (MAE)
-
-```bash
-conda activate pi0-env
-
-# For LoRA models (need to merge first):
-python src/ur_simulation_gz/ur_simulation_gz/scripts/merge_lora.py \
-    --base ./ai-models/lerobot/pi0_libero_base \
-    --lora ./outputs/train/ur3_pi0_lora/checkpoints/040000/pretrained_model \
-    --output ./ai-models/ur3_pi0_lora_merged
-
-python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
-    --model ./ai-models/ur3_pi0_lora_merged \
-    --ckpt ./outputs/train/ur3_pi0_lora/checkpoints/040000/pretrained_model
-
-# For full fine-tune models (use checkpoint directly):
-python src/ur_simulation_gz/ur_simulation_gz/scripts/eval_lora_model.py \
-    --model ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model \
-    --ckpt ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model
-```
-
-MAE interpretation:
-- **< 0.10 rad**: Excellent, ready for Gazebo
-- **0.10–0.20 rad**: Good, may work in Gazebo
-- **> 0.30 rad**: Needs more training
-
-### 5.2 Gazebo Test
+### 5.1 Pi0 Pick-and-Place
 
 **Terminal 1 — Gazebo:**
 ```bash
@@ -298,57 +251,48 @@ cd ~/ur3_ft300_ws && source install/setup.bash
 ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py
 ```
 
-**Terminal 2 — ROS Bridge (with spawn):**
+**Terminal 2 — ROS Bridge:**
 ```bash
-/usr/bin/python3.10 src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_ros_side.py --spawn
+/usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_ros_side.py --spawn
 ```
 
-**Terminal 3 — Pi0 Inference:**
+**Terminal 3 — Inference:**
 ```bash
 conda activate pi0-env
+python src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_inference.py \
+    --mode bf16 --hz 10 \
+    --model ai-models/pi0/pi0_full_v3/checkpoints/135000/pretrained_model
+```
 
-# LoRA merged model:
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py \
-    --model ./ai-models/ur3_pi0_lora_merged --mode bf16 --hz 10
+### 5.2 SA-MOE Peg-in-Hole
 
-# Full fine-tune model:
-python src/ur_simulation_gz/ur_simulation_gz/scripts/ur3_pi0_inference.py \
-    --model ./outputs/train/ur3_pi0_full/checkpoints/40000/pretrained_model --mode bf16 --hz 10
+**Terminal 2 — ROS Bridge:**
+```bash
+/usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_ros_side.py
+```
+
+**Terminal 3 — Inference:**
+```bash
+conda activate pi0-env
+python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_inference.py \
+    --checkpoint ai-models/samoe/v7/checkpoints/030451/pretrained_model
 ```
 
 ### 5.3 Data Flow
 
 ```
-Gazebo → /joint_states → ros_side.py → /tmp/ur3_joint_state.txt → pi0_inference.py
-Gazebo → /camera/image_raw → ros_side.py → /tmp/ur3_camera{0,1}.npy → pi0_inference.py
-Pi0 action → /tmp/ur3_action.txt → ros_side.py → FollowJointTrajectory → UR3
+Gazebo → /joint_states        → ros_side.py → /tmp/ur3_joint_state.txt → inference.py
+Gazebo → /camera/image_raw     → ros_side.py → /tmp/ur3_camera{0,1}.npy → inference.py
+Gazebo → /force_torque/wrench  → ros_side.py → /tmp/ur3_force.npy       → samoe_inference.py
+Inference → /tmp/ur3_action.txt → ros_side.py → FollowJointTrajectory → UR3
 ```
 
 ---
 
-## 6. Scripts
+## 6. Known Issues
 
-| Script | Python | Purpose |
-|--------|--------|---------|
-| `ur3_record_pick_place.py` | 3.10 (system) | Record pick-and-place trajectories |
-| `ur3_convert_to_lerobot.py` | pi0-env | Convert .npz → LeRobot dataset |
-| `make_video.py` | 3.10 (system) | Generate video from recorded data |
-| `visualize_dataset.py` | 3.10 (system) | Static joint trajectory charts |
-| `compute_ik.py` | 3.10 (system) | Compute IK for new waypoints |
-| `ur3_pi0_inference.py` | pi0-env | Pi0 inference loop (w/ state machine, EMA, atomic write) |
-| `ur3_pi0_ros_side.py` | 3.10 (system) | ROS ↔ /tmp/ bridge, block/bowl spawn |
-| `merge_lora.py` | pi0-env | Offline merge LoRA adapter → single safetensors |
-| `eval_lora_model.py` | pi0-env | Dataset prediction MAE evaluation |
-| `fix_checkpoint_keys.py` | pi0-env | Fix safetensors key mismatches |
+- **Pi0 Identity Shortcut**: Absolute actions at high fps cause `action ≈ state`. Model learns identity mapping. Fix: use delta actions (`action = next_state - state`).
+- **SA-MOE V8**: Training stopped at 10K/30K. `stage_acc=0%`, `alpha=0.05` (ModalGate collapse).
+- **wrist_2 joint**: Near-zero variance (std=0.003 rad) due to UR3 mechanical coupling.
 
----
-
-## 7. Troubleshooting
-
-- **Controller not responding**: Wait 30s after Gazebo launch for controller spawn.
-- **OOM during training (5080)**: Reduce `--batch_size=1`, enable `--policy.gradient_checkpointing=true`, use `--policy.dtype=bfloat16`.
-- **OOM during model loading**: Script uses `init_empty_weights()` + `to_empty()`. If it still OOMs, reduce system memory usage.
-- **Model predicts wrong actions**: Check that `empty_cameras=0` in inference (matches training). Verify normalizer stats are from the correct checkpoint.
-- **Gripper state machine cycles**: Normal — model needs to see the block in camera to guide approach. If MAE > 0.3, model isn't accurate enough yet.
-- **Tokenizer not found**: Ensure `ai-models/paligemma_tokenizer/` contains tokenizer files.
-- **Network unreachable for HF**: Use `export HF_ENDPOINT=https://hf-mirror.com` for China mirror, or download models via browser and scp to server.
+See [PROJECT_REFERENCE.md](PROJECT_REFERENCE.md) for complete details.

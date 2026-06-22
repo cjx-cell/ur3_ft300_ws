@@ -33,7 +33,7 @@
 
 ```bash
 # 在本地机器上
-scp -r ~/ur3_ft300_ws/ai-models/ur3_pick_place_10hz_lerobot a100:~/ur3_ft300_ws/ai-models/
+scp -r ~/ur3_ft300_ws/ai-models/datasets/ur3_pick_place_10hz_lerobot a100:~/ur3_ft300_ws/ai-models/
 ```
 
 ### 3.2 确认代码中已有 vision key fix
@@ -62,7 +62,7 @@ scp ~/lerobot/src/lerobot/policies/pi0/modeling_pi0.py a100:~/lerobot/src/lerobo
 ### 3.3 确认预训练模型
 
 ```bash
-ls ~/ur3_ft300_ws/ai-models/lerobot/pi0_libero_base/model.safetensors
+ls ~/ur3_ft300_ws/ai-models/pi0/pi0_libero_base/model.safetensors
 # 应该存在，~6.6GB
 ```
 
@@ -73,7 +73,7 @@ source ~/miniconda3/etc/profile.d/conda.sh && conda activate pi0-env
 
 python -m lerobot.scripts.lerobot_train \
     --policy.path=lerobot/pi0 \
-    --policy.pretrained_path=/home/a/ur3_ft300_ws/ai-models/lerobot/pi0_libero_base \
+    --policy.pretrained_path=/home/a/ur3_ft300_ws/ai-models/pi0/pi0_libero_base \
     --policy.num_inference_steps=50 \
     --policy.chunk_size=50 \
     --policy.n_action_steps=50 \
@@ -86,7 +86,7 @@ python -m lerobot.scripts.lerobot_train \
     --policy.dtype=bfloat16 \
     --policy.device=cuda \
     --dataset.repo_id=local/ur3_pick_place_10hz \
-    --dataset.root=/home/a/ur3_ft300_ws/ai-models/ur3_pick_place_10hz_lerobot \
+    --dataset.root=/home/a/ur3_ft300_ws/ai-models/datasets/ur3_pick_place_10hz_lerobot \
     --dataset.streaming=false \
     --dataset.use_imagenet_stats=true \
     --dataset.image_transforms.enable=true \
@@ -142,7 +142,7 @@ Loss 降到 0.005 以下是正常的，但**不能只看 loss**。
 python -m lerobot.scripts.lerobot_eval \
     --policy.path=outputs/train/ur3_pi0_full_v3/checkpoints/last/pretrained_model \
     --dataset.repo_id=local/ur3_pick_place_10hz \
-    --dataset.root=/home/a/ur3_ft300_ws/ai-models/ur3_pick_place_10hz_lerobot
+    --dataset.root=/home/a/ur3_ft300_ws/ai-models/datasets/ur3_pick_place_10hz_lerobot
 ```
 
 **V3 成功标准**：
@@ -181,7 +181,7 @@ scp -r a100:~/outputs/train/ur3_pi0_full_v3 ~/ur3_ft300_ws/ai-models/
 
 | 路径 | 说明 |
 |------|------|
-| `~/ur3_ft300_ws/ai-models/ur3_pick_place_10hz_lerobot/` | 10fps 数据集 |
-| `~/ur3_ft300_ws/ai-models/lerobot/pi0_libero_base/` | Pi0 预训练权重 (6.6GB) |
+| `~/ur3_ft300_ws/ai-models/datasets/ur3_pick_place_10hz_lerobot/` | 10fps 数据集 |
+| `~/ur3_ft300_ws/ai-models/pi0/pi0_libero_base/` | Pi0 预训练权重 (6.6GB) |
 | `~/lerobot/src/lerobot/policies/pi0/modeling_pi0.py` | 含 vision key fix (line 1096-1104) |
 | `~/ur3_ft300_ws/docs/A100_V3_TRAINING_GUIDE.md` | 本文档 |

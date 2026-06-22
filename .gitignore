@@ -23,12 +23,12 @@ Thumbs.db
 *.gv
 *.pdf
 
-# Model weights (too large for git)
-ai-models/lerobot/pi0/*.safetensors
-ai-models/lerobot/pi0_libero_base/*.safetensors
-ai-models/ur3_pi0_lora*/
-ai-models/ur3_pi0_*_merged/
+# Model weights & datasets (too large for git)
+ai-models/pi0/pi0_libero_base/
+ai-models/pi0/pi0_full_v*/
+ai-models/samoe/
+ai-models/lerobot/
+ai-models/datasets/
+ai-models/paligemma_tokenizer/
 outputs/
-
-# Collected data (optional: keep small .npz files, ignore large)
-ai-models/ur3_pick_place_raw/trajectory_viz/
+/tmp/

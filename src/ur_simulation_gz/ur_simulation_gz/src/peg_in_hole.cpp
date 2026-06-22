@@ -67,8 +67,8 @@ static constexpr double TOOL0_GRASP_Z    = 1.035;
 static constexpr double TOOL0_APPROACH_Z = 0.865 + PEG_EXTEND;  // = 1.125
 // INSERT: peg_bottom=0.805 → 10mm above base plate; peg in hole, not touching bottom
 static constexpr double TOOL0_INSERT_Z   = 0.805 + PEG_EXTEND;  // = 1.065
-// TIGHTEN: peg_bottom=0.795 → just touching base plate surface
-static constexpr double TOOL0_TIGHTEN_Z  = 0.795 + PEG_EXTEND;  // = 1.055
+// SEAT: peg_bottom=0.793 → light press onto base plate + touch inner walls
+static constexpr double TOOL0_SEAT_Z     = 0.793 + PEG_EXTEND;  // = 1.053
 // Gripper partial-close: firm grip on 0.05m peg (open=0.1, full=0.55)
 static constexpr double GRIPPER_GRASP    = 0.40;
 
@@ -201,6 +201,7 @@ int main(int argc, char** argv)
     arm.setJointValueTarget(READY_JOINTS);
     try_move(arm, logger, "HOME");
     RCLCPP_INFO(logger, "RECORD_START");  // signal Python to start recording
+    RCLCPP_INFO(logger, "STAGE:0");  // 0=approach: move above peg
 
     // ── 2. Move TCP above peg (Cartesian) ──
     log_info(logger, "=== 2. ABOVE peg ===");
@@ -218,6 +219,7 @@ int main(int argc, char** argv)
 
     // ── 3. Open gripper ──
     log_info(logger, "=== 3. Open gripper ===");
+    RCLCPP_INFO(logger, "STAGE:1");  // 1=align: open gripper, approach peg
     gripper.setNamedTarget(GRIP_OPEN);
     try_move(gripper, logger, "open");
 
@@ -239,6 +241,7 @@ int main(int argc, char** argv)
     log_info(logger, "=== 5. Close gripper (grip peg) ===");
     gripper.setJointValueTarget("robotiq_85_left_knuckle_joint", GRIPPER_GRASP);
     try_move(gripper, logger, "close");
+    RCLCPP_INFO(logger, "STAGE:2");  // 2=grasp: grip peg, lift
 
     // ── 6. LIFT peg (Cartesian up) ──
     log_info(logger, "=== 6. LIFT ===");
@@ -256,6 +259,7 @@ int main(int argc, char** argv)
 
     // ── 7. Move TCP above hole (Cartesian) ──
     log_info(logger, "=== 7. ABOVE hole ===");
+    RCLCPP_INFO(logger, "STAGE:0");  // 0=approach: transport to hole
     {
       auto current = arm.getCurrentPose(IK_LINK);
       geometry_msgs::msg::Pose tgt;
@@ -269,6 +273,7 @@ int main(int argc, char** argv)
     }
 
     // ── 8. APPROACH hole (slow Cartesian descent) ──
+    RCLCPP_INFO(logger, "STAGE:1");  // 1=align: descend to hole entrance
     log_info(logger, "=== 8. APPROACH hole ===");
     {
       auto current = arm.getCurrentPose(IK_LINK);
@@ -284,6 +289,7 @@ int main(int argc, char** argv)
 
     // ── 9. INSERT peg into hole (very slow, small lateral oscillations for alignment) ──
     log_info(logger, "=== 9. INSERT ===");
+    RCLCPP_INFO(logger, "STAGE:3");  // 3=insert: push peg into hole
     {
       auto current = arm.getCurrentPose(IK_LINK);
       geometry_msgs::msg::Pose tgt;
@@ -296,31 +302,45 @@ int main(int argc, char** argv)
       try_cartesian(arm, logger, tgt, IK_LINK, "INSERT", 0.003);
     }
 
-    // ── 10. TIGHTEN (small press + wiggle to seat) ──
-    log_info(logger, "=== 10. TIGHTEN ===");
+    // ── 10. SEAT (light press + touch inner walls to confirm insertion) ──
+    log_info(logger, "=== 10. SEAT ===");
+    RCLCPP_INFO(logger, "STAGE:4");  // 4=confirm: press bottom + touch walls
     {
-      // Small downward press: 2mm below INSERT height
+      // Light downward press: 2mm below INSERT, peg touches base plate
       auto current = arm.getCurrentPose(IK_LINK);
       geometry_msgs::msg::Pose tgt;
       tgt.orientation = current.pose.orientation;
       tgt.position.x = hole_world_x;
       tgt.position.y = hole_world_y;
-      tgt.position.z = TOOL0_TIGHTEN_Z;
+      tgt.position.z = TOOL0_SEAT_Z;
       RCLCPP_INFO(logger, "  press → [%.3f %.3f %.3f]",
                   tgt.position.x, tgt.position.y, tgt.position.z);
-      try_cartesian(arm, logger, tgt, IK_LINK, "TIGHTEN press", 0.002);
+      try_cartesian(arm, logger, tgt, IK_LINK, "SEAT press", 0.002);
 
-      // Lateral wiggles to generate torque data
-      for (int wiggle = 0; wiggle < 2; wiggle++) {
-        double dx = (wiggle % 2 == 0) ? 0.003 : -0.003;
+      // Touch inner walls in x ± direction
+      for (int wall = 0; wall < 2; wall++) {
+        double dx = (wall % 2 == 0) ? 0.004 : -0.004;
         auto cur = arm.getCurrentPose(IK_LINK);
         geometry_msgs::msg::Pose wtgt;
         wtgt.orientation = cur.pose.orientation;
         wtgt.position.x = hole_world_x + dx;
         wtgt.position.y = hole_world_y;
-        wtgt.position.z = TOOL0_TIGHTEN_Z;
+        wtgt.position.z = TOOL0_SEAT_Z;
         try_cartesian(arm, logger, wtgt, IK_LINK,
-                      "TIGHTEN wiggle " + std::to_string(wiggle), 0.005);
+                      "SEAT wall_x " + std::to_string(wall), 0.005);
+      }
+
+      // Touch inner walls in y ± direction
+      for (int wall = 0; wall < 2; wall++) {
+        double dy = (wall % 2 == 0) ? 0.004 : -0.004;
+        auto cur = arm.getCurrentPose(IK_LINK);
+        geometry_msgs::msg::Pose wtgt;
+        wtgt.orientation = cur.pose.orientation;
+        wtgt.position.x = hole_world_x;
+        wtgt.position.y = hole_world_y + dy;
+        wtgt.position.z = TOOL0_SEAT_Z;
+        try_cartesian(arm, logger, wtgt, IK_LINK,
+                      "SEAT wall_y " + std::to_string(wall), 0.005);
       }
 
       // Return to center
@@ -329,8 +349,8 @@ int main(int argc, char** argv)
       ctgt.orientation = cur2.pose.orientation;
       ctgt.position.x = hole_world_x;
       ctgt.position.y = hole_world_y;
-      ctgt.position.z = TOOL0_TIGHTEN_Z;
-      try_cartesian(arm, logger, ctgt, IK_LINK, "TIGHTEN center", 0.005);
+      ctgt.position.z = TOOL0_SEAT_Z;
+      try_cartesian(arm, logger, ctgt, IK_LINK, "SEAT center", 0.005);
     }
 
     // ── 11. Open gripper ──

@@ -44,7 +44,7 @@ v1 全量微调 84K 步后模型完全没学到任务——Gazebo 中机械臂�
 conda activate pi0-env
 python -c "
 from safetensors.torch import load_file
-sd = load_file('./ai-models/lerobot/pi0_libero_base/model.safetensors', device='cpu')
+sd = load_file('./ai-models/pi0/pi0_libero_base/model.safetensors', device='cpu')
 from accelerate import init_empty_weights
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
@@ -72,9 +72,9 @@ cd ~/ur3_ft300_ws && conda activate pi0-env
 pip install -e ~/lerobot
 
 python -m lerobot.scripts.lerobot_train \
-  --policy.path=./ai-models/lerobot/pi0_libero_base \
+  --policy.path=./ai-models/pi0/pi0_libero_base \
   --dataset.repo_id=local/ur3_pick_place \
-  --dataset.root=./ai-models/ur3_pick_place_lerobot \
+  --dataset.root=./ai-models/datasets/ur3_pick_place_lerobot \
   --policy.dtype=bfloat16 --policy.device=cuda \
   --policy.train_expert_only=false \
   --policy.freeze_vision_encoder=false \
@@ -110,7 +110,7 @@ scp -r ./outputs/train/ur3_pi0_full_v2/checkpoints/084000 \
 
 | 文件 | 路径 |
 |------|------|
-| Base model | `./ai-models/lerobot/pi0_libero_base/` |
-| 本地数据集 | `./ai-models/ur3_pick_place_lerobot/` |
+| Base model | `./ai-models/pi0/pi0_libero_base/` |
+| 本地数据集 | `./ai-models/datasets/ur3_pick_place_lerobot/` |
 | Tokenizer | `./ai-models/paligemma_tokenizer/` |
 | 待修复的文件 | `~/lerobot/src/lerobot/policies/pi0/modeling_pi0.py` |
