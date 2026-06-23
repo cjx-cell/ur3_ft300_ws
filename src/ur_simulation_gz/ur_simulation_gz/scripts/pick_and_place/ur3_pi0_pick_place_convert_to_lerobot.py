@@ -22,11 +22,14 @@ except ImportError as e:
 
 
 def find_episodes(input_dir):
-    """扫描所有 *_episode_*/data.npz 文件"""
+    """扫描所有 *_episode_*/data.npz 文件，跳过 failed 的 episode"""
     episodes = []
     for d in sorted(os.listdir(input_dir)):
         ep_dir = os.path.join(input_dir, d)
         if "_episode_" in d and os.path.isdir(ep_dir):
+            if "_failed" in d:
+                print(f"  ⏭ 跳过 failed episode: {d}")
+                continue
             npz_path = os.path.join(ep_dir, "data.npz")
             if os.path.exists(npz_path):
                 episodes.append(npz_path)
@@ -48,6 +51,7 @@ def main():
 
     step = max(1, args.source_fps // args.fps)
     print(f"降采样: {args.source_fps}Hz → {args.fps}Hz (每 {step} 帧取 1 帧)")
+    print("提示: 训练时使用 --policy.use_relative_actions=true 可避免 Identity Shortcut")
 
     input_dir = Path(args.input)
     episodes = find_episodes(input_dir)

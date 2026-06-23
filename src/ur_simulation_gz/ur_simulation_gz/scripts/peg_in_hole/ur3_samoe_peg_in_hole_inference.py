@@ -33,6 +33,11 @@ def main():
         print(f"ERROR: config.json not found at {ckpt}")
         sys.exit(1)
 
+    import json
+    with open(ckpt / "config.json") as f:
+        ckpt_config = json.load(f)
+    use_relative = ckpt_config.get("use_relative_actions", False)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print(f"Loading SA-MOE from: {ckpt}")
@@ -135,9 +140,14 @@ def main():
             action = actions[0].cpu().numpy()
             if action.ndim > 1:
                 action = action[0]
-            # Model outputs delta — convert to absolute: action = state + delta
-            delta_action = action * action_std + action_mean
-            absolute_action = state + delta_action
+            # 反归一化
+            action_unnorm = action * action_std + action_mean
+            # 相对模式: model output = delta → absolute = state + delta
+            # 绝对模式: model output = absolute → 直接使用
+            if use_relative:
+                absolute_action = state + action_unnorm
+            else:
+                absolute_action = action_unnorm
 
             # Atomic write action
             tmp = ACTION_FILE + ".tmp"

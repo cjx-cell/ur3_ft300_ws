@@ -57,6 +57,7 @@ def main():
 
     step = max(1, args.source_fps // args.fps)
     print(f"Downsampling: {args.source_fps}Hz → {args.fps}Hz (every {step}th frame)")
+    print("Tip: use --policy.use_relative_actions=true during training to avoid Identity Shortcut")
 
     input_dir = Path(args.input)
     episodes, skipped = find_episodes(input_dir, skip_failed=not args.keep_failed)

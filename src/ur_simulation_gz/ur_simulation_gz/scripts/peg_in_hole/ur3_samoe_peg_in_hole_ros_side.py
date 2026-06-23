@@ -117,7 +117,8 @@ class SAMoeROSSide(Node):
     def _wrist(self, msg):
         try:
             bgr = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            rgb = cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), IMG_SIZE)
+            rgb = cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), IMG_SIZE,
+                            interpolation=cv2.INTER_AREA)
             with self.lock:
                 self.wrist_img = rgb.astype(np.float32) / 255.0
         except Exception:
@@ -126,7 +127,8 @@ class SAMoeROSSide(Node):
     def _global(self, msg):
         try:
             bgr = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            rgb = cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), IMG_SIZE)
+            rgb = cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), IMG_SIZE,
+                            interpolation=cv2.INTER_AREA)
             with self.lock:
                 self.global_img = rgb.astype(np.float32) / 255.0
         except Exception:

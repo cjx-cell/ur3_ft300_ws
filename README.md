@@ -156,11 +156,17 @@ ros2 launch ur_simulation_gz ur3_ft300_robotiq.launch.py gazebo_gui:=false
 
 ```bash
 # Gazebo must be running first
+# 10Hz 直接录制 (推荐): 帧间 delta ~0.01-0.05 rad, 无重复帧
 /usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_record.py \
-    --episodes 50
+    --episodes 50 --hz 10
+
+# 50Hz (旧): 需要后续降采样
+/usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_record.py \
+    --episodes 50 --hz 50
 ```
 
-The script automatically: spawns block + bowl → runs C++ `pick_and_place` → records at 50Hz → saves `.npz`.
+The script automatically: spawns block + bowl → runs C++ `pick_and_place` → records → saves `.npz`.
+Failed episodes are saved with `_failed` suffix (for debugging) but auto-skipped during conversion.
 
 Output: `ai-models/datasets/ur3_pick_place_raw/`
 
@@ -168,7 +174,7 @@ Output: `ai-models/datasets/ur3_pick_place_raw/`
 
 ```bash
 /usr/bin/python3 src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_record.py \
-    --episodes 50
+    --episodes 50 --hz 10
 ```
 
 Records at 10Hz with force/torque data + stage labels (0=approach, 1=align, 2=grasp, 3=insert, 4=confirm).
@@ -194,13 +200,14 @@ python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_i
 ```bash
 conda activate pi0-env
 
-# Pick-and-place (10fps)
+# Pick-and-place (10Hz 直接录制 → source_fps=10, 无需降采样)
+# Failed 目录 (_failed) 自动跳过
 python src/ur_simulation_gz/ur_simulation_gz/scripts/pick_and_place/ur3_pi0_pick_place_convert_to_lerobot.py \
     --input ai-models/datasets/ur3_pick_place_raw \
     --repo_id local/ur3_pick_place_10hz \
-    --fps 10 --source_fps 50
+    --fps 10 --source_fps 10
 
-# Peg-in-hole
+# Peg-in-hole (source_fps 匹配录制 hz)
 python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_in_hole_convert_to_lerobot.py \
     --input ai-models/datasets/ur3_peg_in_hole_raw \
     --repo_id local/ur3_peg_in_hole
@@ -222,6 +229,7 @@ python -m lerobot.scripts.lerobot_train \
     --policy.dtype=bfloat16 --policy.device=cuda \
     --policy.freeze_vision_encoder=false \
     --policy.train_expert_only=false \
+    --policy.use_relative_actions=true \
     --dataset.repo_id=local/ur3_pick_place_10hz \
     --dataset.root=ai-models/datasets/ur3_pick_place_10hz_lerobot \
     --batch_size=2 --steps=135000 \
@@ -291,8 +299,10 @@ Inference → /tmp/ur3_action.txt → ros_side.py → FollowJointTrajectory → 
 
 ## 6. Known Issues
 
-- **Pi0 Identity Shortcut**: Absolute actions at high fps cause `action ≈ state`. Model learns identity mapping. Fix: use delta actions (`action = next_state - state`).
-- **SA-MOE V8**: Training stopped at 10K/30K. `stage_acc=0%`, `alpha=0.05` (ModalGate collapse).
+- **Pi0 Identity Shortcut**: Absolute actions at high fps cause `action ≈ state`. Model learns identity mapping. **Fix**: `use_relative_actions=true` during training + 10Hz 直接录制 (no downsampling needed). (2026-06-23 已实施)
+- **Camera Bridge**: `parameter_bridge` was slow for 640×480 images. **Fix**: `ros_gz_image/image_bridge` (无损二进制传输). (2026-06-23 已修复)
+- **Image Resize**: `cv2.INTER_LINEAR` suboptimal for downscaling. **Fix**: `cv2.INTER_AREA` (区域平均). (2026-06-23 已修复)
+- **SA-MOE V8**: Training stopped at 10K/30K. Diagnosed: `sa_moe_feature_dim` mismatch (1024 vs pretrained 2048) → SA-MOE head randomly initialized → `stage_acc=0%`, `alpha=0.05`.
 - **wrist_2 joint**: Near-zero variance (std=0.003 rad) due to UR3 mechanical coupling.
 
 See [PROJECT_REFERENCE.md](PROJECT_REFERENCE.md) for complete details.
