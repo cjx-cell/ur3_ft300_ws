@@ -182,12 +182,12 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
-    # Camera bridges (Gazebo → ROS 2)
+    # Camera bridges (Gazebo → ROS 2, 专用图像传输, 无损二进制)
     gz_wrist_camera_bridge = Node(
-        package="ros_gz_bridge",
-        executable="parameter_bridge",
+        package="ros_gz_image",
+        executable="image_bridge",
         arguments=[
-            "/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image",
         ],
         remappings=[
             ("/world/simulation_world/model/ur3_ft300_robotiq/link/wrist_3_link/sensor/wrist_camera_sensor/image",
@@ -197,10 +197,10 @@ def launch_setup(context, *args, **kwargs):
     )
 
     gz_global_camera_bridge = Node(
-        package="ros_gz_bridge",
-        executable="parameter_bridge",
+        package="ros_gz_image",
+        executable="image_bridge",
         arguments=[
-            "/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image",
         ],
         remappings=[
             ("/world/simulation_world/model/ur3_ft300_robotiq/link/global_camera_mount/sensor/global_camera_sensor/image",
@@ -414,7 +414,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "controller_start_delay",
-            default_value="30.0",
+            default_value="5.0",
             description="Delay before starting controller spawners (seconds).",
         )
     )

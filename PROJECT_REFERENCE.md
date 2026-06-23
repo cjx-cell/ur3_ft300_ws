@@ -1,6 +1,6 @@
 # UR3 FT300 Pi0 / SA-MOE 项目完整参考
 
-> 最后更新: 2026-06-22
+> 最后更新: 2026-06-23
 
 ---
 
@@ -222,7 +222,7 @@ python -m lerobot.scripts.lerobot_train \
 
 **Identity Shortcut**: 绝对动作格式下 `action ≈ state`（即使在 10fps），模型不需要看图像就能通过恒等映射获得极低 loss。
 
-**解决方案**: 使用 Delta 动作 → `action_delta = next_state - current_state`。当前状态转 delta 后，模型必须依赖视觉输入预测运动方向。
+**解决方案**: 训练时使用 `use_relative_actions=true` — 模型内部自动处理 `action_rel = action - state`。推理时模型输出 delta，脚本自动加回 state 得到绝对关节角。这是 Pi0 官方支持的相对动作机制，比手动在数据中存 delta 更标准。
 
 ## 1.5 Pi0 脚本说明
 
@@ -522,12 +522,102 @@ python src/ur_simulation_gz/ur_simulation_gz/scripts/peg_in_hole/ur3_samoe_peg_i
 # Part 5 — 已知问题 & 下一步
 
 ## Pi0
-- [ ] **Identity Shortcut**: 需改为 delta 动作 → 修改 `ur3_convert_pick_place_to_lerobot.py` 第 127 行
-- [ ] V3 推理 `num_inference_steps` 已从 10 修复为 50 ✅
+- [x] **Identity Shortcut**: 已通过 `use_relative_actions=true` 修复 ✅
+- [x] V3 推理 `num_inference_steps` 已从 10 修复为 50 ✅
+- [x] **图像质量**: 相机分辨率 224→640 + 补光灯 ✅
+- [x] **摄像头频率**: parameter_bridge → ros_gz_image/image_bridge (无损二进制), update_rate 30→50 ✅
+- [x] **图像缩放**: cv2.resize INTER_LINEAR → INTER_AREA (区域平均，全像素参与) ✅ (2026-06-23)
+- [x] **直接10Hz录制**: 新增 --hz 参数, 默认10Hz, 帧间delta有意义 ✅ (2026-06-23)
+- [x] **失败数据过滤**: convert 脚本自动跳过 _failed 目录 ✅ (2026-06-23)
+- [ ] **夹爪重力下垂**: Humble gz_ros2_control `position` 接口不做力矩级 PID
 - [ ] wrist_2 关节方差 ~0 (机械耦合)，可能影响学习
 
 ## SA-MOE
+- [x] **数据管道同步**: peg-in-hole 脚本同步 INTER_AREA + --hz + failed 过滤 ✅ (2026-06-23)
 - [ ] V8 训练中断于 10K/30K，需恢复或重启
-- [ ] stage_acc 持续为 0% — stage 分类器不工作
-- [ ] alpha 锁定 0.05 — ModalGate 退化
+- [ ] **stage_acc 持续为 0%** — 诊断: V8 (1024-dim) 加载 delta_full (2048-dim) 维度不匹配，SA-MOE 头随机初始化
+- [ ] **alpha 锁定 0.05** — 诊断: stage_acc=0% → 错误 stage 预测 → stage_priors 压垮 alpha logit → clamp
 - [ ] V8_balanced 因 episode index 越界崩溃
+
+---
+
+# Part 6 — 2026-06-23 改动记录
+
+## 6.1 摄像头频率修复
+
+**根因**: Gazebo 原生 camera ~51Hz, 但 `ros_gz_bridge/parameter_bridge` 对 900KB 图像做文本序列化, ROS 2 只收到 10-18Hz。
+
+**修复**: `parameter_bridge` → `ros_gz_image/image_bridge` (专用二进制图像传输, 无损)
+
+**文件**: `launch/ur3_ft300_robotiq.launch.py`
+- 两个 `parameter_bridge` 节点 → 两个独立 `image_bridge` 节点
+- wrist_camera: 15→22-34Hz, global_camera: 28→18-23Hz (总吞吐持平, 手腕更优)
+
+**URDF**: `update_rate` 30→50 (匹配录制频率)
+
+## 6.2 图像缩放优化
+
+**文件**:
+- `scripts/pick_and_place/ur3_pi0_pick_place_record.py`
+- `scripts/peg_in_hole/ur3_samoe_peg_in_hole_record.py`
+- `scripts/peg_in_hole/ur3_samoe_peg_in_hole_ros_side.py`
+
+**改动**: `cv2.resize()` 默认 INTER_LINEAR (2×2邻域) → `interpolation=cv2.INTER_AREA` (区域平均, 所有源像素参与)
+- 640×480→224×224 下采样, INTER_AREA 是 OpenCV 推荐的下采样插值法
+- 本质: 640 渲染提供超采样抗锯齿 (SSAA), INTER_AREA 在 CPU 端做高质量平均
+
+## 6.3 直接 10Hz 录制
+
+**根因**: 50Hz 录制 → 降采样 10Hz 浪费磁盘 + action delta ~0.0004 rad 导致 Identity Shortcut
+
+**修复**: 录制脚本新增 `--hz` 参数 (默认 10), 直接 10Hz 录制
+- 10Hz 帧间 100ms, action delta ~0.01-0.05 rad (有意义)
+- 摄像头 22+Hz > 10Hz → 每帧图像唯一
+- 转换脚本 `--source_fps` 匹配录制 Hz, 无需降采样
+
+**文件**:
+- `scripts/pick_and_place/ur3_pi0_pick_place_record.py` — 新增 `--hz` 参数
+- `scripts/peg_in_hole/ur3_samoe_peg_in_hole_record.py` — 新增 `--hz` 参数
+- `scripts/pick_and_place/ur3_pi0_pick_place_convert_to_lerobot.py` — find_episodes() 跳过 `_failed`
+- peg-in-hole convert 已有 failed 过滤, 无需改
+
+## 6.4 失败数据过滤
+
+**文件**: `scripts/pick_and_place/ur3_pi0_pick_place_convert_to_lerobot.py`
+
+**改动**: `find_episodes()` 检测目录名含 `_failed` → 打印 `⏭ 跳过` → 不进入 LeRobot
+
+## 6.5 SA-MOE V8 诊断
+
+| 问题 | 根因 | 解决方案 |
+|------|------|---------|
+| stage_acc=0% | V8 config `sa_moe_feature_dim=1024` 但 pretrained delta_full 是 2048-dim → 维度不匹配 → SA-MOE 头随机初始化 | 设置 `sa_moe_feature_dim=2048` 以匹配 pretrained checkpoint |
+| alpha=0.05 | stage_acc=0% → argmax(stage_probs) 随机 → stage_priors[-3.0] 加到 alpha logit → softmax 后接近 0 → clamp 到 0.05 | 修复 stage_acc 后 alpha 应自然恢复 |
+| batch_size=1 | 稀有 stage (insert/tighten) 每 15-30 步才出现一次 | 尝试 batch_size=2 或重采样 |
+
+### 维度不匹配详情
+
+```
+V8 config:     sa_moe_feature_dim = 1024
+delta_full:    transformer_encoder dim = 2048
+
+加载时 transformer_encoder 所有参数 size mismatch:
+  copying param from [6144, 2048] → model expects [3072, 1024]
+  结果: 跳过加载, 使用随机初始化
+```
+
+### 修复步骤 (待实施)
+
+1. 修改 V8 config: `sa_moe_feature_dim: 1024 → 2048`
+2. 确认 `fusion_dim` 也匹配 (delta_full 是 2048)
+3. batch_size 1→2 (如果显存够)
+4. 可选: 降低 `stage_loss_weight` 0.2→0.05 (stage 分类弱, 降低权重让主 loss 主导)
+5. 可选: 对齐 `stage_priors` 到实际数据分布 (当前 prior 偏向 stage 0, 但数据以 stage 0/4 为主)
+
+## 6.6 当前操作顺序
+
+1. ✅ 修改所有脚本 (pick-and-place + peg-in-hole)
+2. ⏳ 采集 pick-and-place 数据 (50ep, 10Hz)
+3. ⏳ 转换 → LoRA 训练 → 评估
+4. ⏳ 采集 peg-in-hole 数据
+5. ⏳ 修复 SA-MOE V8 维度问题 → 训练 → 评估

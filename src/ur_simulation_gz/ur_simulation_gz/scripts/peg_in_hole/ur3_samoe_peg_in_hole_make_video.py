@@ -25,7 +25,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-RAW_DIR = Path.home() / "ur3_ft300_ws" / "ai-models" / "ur3_peg_in_hole_raw"
+RAW_DIR = Path.home() / "ur3_ft300_ws" / "ai-models" / "datasets" / "ur3_peg_in_hole_raw"
 OUT_DIR = RAW_DIR / "trajectory_viz"
 JOINT_NAMES = ["sh_pan", "sh_lift", "elbow", "wrist1", "wrist2", "wrist3"]
 STAGE_NAMES = {0:"approach", 1:"align", 2:"grasp", 3:"insert", 4:"confirm"}

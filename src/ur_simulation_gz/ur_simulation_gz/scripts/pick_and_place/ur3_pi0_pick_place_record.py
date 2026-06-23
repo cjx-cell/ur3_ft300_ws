@@ -140,10 +140,15 @@ BOWL_SDF = """<sdf version='1.9'>
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--start_episode", type=int, default=0,
+                        help="Starting episode index (for resuming interrupted collection).")
+    parser.add_argument("--hz", type=int, default=10,
+                        help="Recording Hz. 10 = direct 10fps (no downsampling needed).")
     parser.add_argument("--output", type=str,
                         default=os.path.expanduser(
                             "~/ur3_ft300_ws/ai-models/ur3_pick_place_raw"))
     args = parser.parse_args()
+    record_hz = args.hz
 
     rclpy.init()
     os.makedirs(args.output, exist_ok=True)
@@ -183,7 +188,7 @@ def main():
             try:
                 bgr = self.bridge.imgmsg_to_cv2(msg, "bgr8")
                 return cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
-                                  IMG_SIZE).astype(np.float32) / 255.0
+                                  IMG_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
             except Exception:
                 return None
 
@@ -224,7 +229,7 @@ def main():
     episode_active = threading.Event()  # set when C++ reaches HOME
 
     def recorder_thread():
-        rate = recorder.create_rate(RECORD_HZ)
+        rate = recorder.create_rate(record_hz)
         while recording.is_set():
             with buf.lock:
                 js = (list(buf.joint_positions) if buf.joint_positions
@@ -242,14 +247,14 @@ def main():
 
     rec_thread = threading.Thread(target=recorder_thread, daemon=True)
     rec_thread.start()
-    print(f"Recording started ({RECORD_HZ} Hz)")
+    print(f"Recording started ({record_hz} Hz)")
 
     total_frames = 0
 
     try:
-        for ep in range(args.episodes):
+        for ep in range(args.start_episode, args.start_episode + args.episodes):
             print(f"\n{'='*60}")
-            print(f"Episode {ep+1}/{args.episodes}")
+            print(f"Episode {ep+1}/{args.start_episode + args.episodes}")
 
             # ── Randomized positions (ensure block and bowl far enough apart) ──
             for _ in range(100):  # retry if constraints not met
@@ -294,7 +299,7 @@ def main():
                  "-p", f"block_y:={block_y}",
                  "-p", f"bowl_x:={bowl_x}",
                  "-p", f"bowl_y:={bowl_y}",
-                 "-p", "skip_home:=true"],
+                 "-p", "skip_home:=false"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True)
 
@@ -347,7 +352,9 @@ def main():
                     os.path.join(ep_dir, "data.npz"),
                     state=states_out, action=actions_out,
                     camera0=cam0_out, camera1=cam1_out,
-                    timestamp=timestamps, task=TASK)
+                    timestamp=timestamps, task=TASK,
+                    block_x=np.float32(block_x), block_y=np.float32(block_y),
+                    bowl_x=np.float32(bowl_x), bowl_y=np.float32(bowl_y))
                 total_frames += len(states_out)
                 print(f"  Saved: {ep_name} — {len(states_out)} frames")
 

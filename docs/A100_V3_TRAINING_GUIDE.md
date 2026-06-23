@@ -25,6 +25,7 @@
 | num_inference_steps | 10 | **50** | Euler 积分更充分，减少去噪累积误差 |
 | steps | 84,000 | **135,000** | ~8 epochs over 33,610 frames |
 | scheduler_decay_steps | 80,000 | **130,000** | 覆盖大部分训练步数 |
+| use_relative_actions | false | **true** | ✓ 修复 Identity Shortcut: 模型内部 action_rel = action - state |
 | 其他参数 | — | **不变** | LR=2e-5, batch_size=2, 预训练权重从头加载 |
 
 ## 3. 前置准备
@@ -82,7 +83,7 @@ python -m lerobot.scripts.lerobot_train \
     --policy.n_obs_steps=1 \
     --policy.freeze_vision_encoder=false \
     --policy.train_expert_only=false \
-    --policy.use_relative_actions=false \
+    --policy.use_relative_actions=true \
     --policy.dtype=bfloat16 \
     --policy.device=cuda \
     --dataset.repo_id=local/ur3_pick_place_10hz \
@@ -169,7 +170,7 @@ scp -r a100:~/outputs/train/ur3_pi0_full_v3 ~/ur3_ft300_ws/ai-models/
 
 如果 MAE 仍然 > 0.25 rad，可能的原因和解决方案：
 
-1. **Action 表示问题** — `action = absolute_next_state` 不适合扩散模型。改为相对动作 `action = state[t+1] - state[t]` (`use_relative_actions=true`)
+1. **Action 表示问题** — 已通过 `use_relative_actions=true` 修复。如果仍失败，检查 `relative_exclude_joints` 是否排除了正确的关节。gripper 关节通常应排除（非连续运动）。
 
 2. **chunk_size 太大** — 50 tokens × 5s horizon 跨度太大。尝试 `chunk_size=20` (2s horizon at 10fps)
 

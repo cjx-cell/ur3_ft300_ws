@@ -268,10 +268,15 @@ def auto_label_stage(gripper_pos, force_6d, eef_z=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--start_episode", type=int, default=0,
+                        help="Starting episode index (for resuming).")
+    parser.add_argument("--hz", type=int, default=10,
+                        help="Recording Hz. Default 10 (direct 10fps, no downsampling).")
     parser.add_argument("--output", type=str,
                         default=os.path.expanduser(
                             "~/ur3_ft300_ws/ai-models/ur3_peg_in_hole_raw"))
     args = parser.parse_args()
+    record_hz = args.hz
 
     rclpy.init()
     os.makedirs(args.output, exist_ok=True)
@@ -332,7 +337,7 @@ def main():
             try:
                 bgr = self.bridge.imgmsg_to_cv2(msg, "bgr8")
                 return cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
-                                  IMG_SIZE).astype(np.float32) / 255.0
+                                  IMG_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
             except Exception:
                 return None
 
@@ -376,7 +381,7 @@ def main():
     buf.current_stage = -1  # -1 = unlabeled (before first STAGE:N)
 
     def recorder_thread():
-        rate = recorder.create_rate(RECORD_HZ)
+        rate = recorder.create_rate(record_hz)
         while recording.is_set():
             with buf.lock:
                 js = (list(buf.joint_positions) if buf.joint_positions
@@ -406,7 +411,7 @@ def main():
 
     rec_thread = threading.Thread(target=recorder_thread, daemon=True)
     rec_thread.start()
-    print(f"Recording started ({RECORD_HZ} Hz) — SA-MOE stage scheme: "
+    print(f"Recording started ({record_hz} Hz) — SA-MOE stage scheme: "
           "0=approach 1=align 2=grasp 3=insert 4=confirm")
 
     # ── Capture force bias at idle (FT300 tool weight ~12N in Fz) ──
@@ -420,9 +425,9 @@ def main():
     total_frames = 0
 
     try:
-        for ep in range(args.episodes):
+        for ep in range(args.start_episode, args.start_episode + args.episodes):
             print(f"\n{'='*60}")
-            print(f"Episode {ep+1}/{args.episodes}")
+            print(f"Episode {ep+1}/{args.start_episode + args.episodes}")
 
             # ── Randomized positions ──
             for _ in range(100):
@@ -467,7 +472,7 @@ def main():
                  "-p", f"peg_y:={peg_y}",
                  "-p", f"hole_x:={hole_x}",
                  "-p", f"hole_y:={hole_y}",
-                 "-p", "skip_home:=true"],
+                 "-p", "skip_home:=false"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True)
 
@@ -551,7 +556,9 @@ def main():
                     state=states_out, action=actions_out,
                     force=forces_out, stage=stages_out,
                     camera0=cam0_out, camera1=cam1_out,
-                    timestamp=timestamps, task=TASK)
+                    timestamp=timestamps, task=TASK,
+                    peg_x=np.float32(peg_x), peg_y=np.float32(peg_y),
+                    hole_x=np.float32(hole_x), hole_y=np.float32(hole_y))
 
                 # Stage distribution summary
                 unique_stages, counts = np.unique(stages_out, return_counts=True)

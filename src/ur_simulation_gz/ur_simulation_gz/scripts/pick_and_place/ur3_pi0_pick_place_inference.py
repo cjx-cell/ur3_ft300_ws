@@ -121,6 +121,17 @@ class UR3Pi0Inference:
         for k, v in raw.get("output_features", {}).items():
             output_features[k] = PolicyFeature(type=FeatureType(v["type"]), shape=tuple(v["shape"]))
 
+        # 检测相对动作模式 (use_relative_actions=true 时模型预测 delta = action - state)
+        self.use_relative = raw.get("use_relative_actions", False)
+        # 也可以通过 normalizer 自动检测: relative 模式下 action_mean ≈ 0
+        if not self.use_relative and np.abs(self.action_mean).max() < 0.05:
+            self.use_relative = True
+            print("  自动检测到相对动作模式 (action_mean≈0)")
+        if self.use_relative:
+            print("  ✓ 相对动作模式: 推理输出 delta + state → 绝对关节角")
+        else:
+            print("  ⚠ 绝对动作模式: 推理直接输出绝对关节角 (Identity Shortcut 风险)")
+
         # FIX 1: empty_cameras=0 匹配训练配置
         config = PI0Config(
             device="cpu",
@@ -234,10 +245,20 @@ class UR3Pi0Inference:
                     action = self.policy.select_action(batch)
             else:
                 action = self.policy.select_action(batch)
-        # 反归一化
+        # 反归一化 → 得到模型原始输出 (绝对动作 or 相对增量取决于训练配置)
         action_np = action.cpu().float().numpy().flatten()
         action_unnorm = action_np * self.action_std + self.action_mean
         return action_unnorm
+
+    def _to_absolute(self, model_output, current_state):
+        """将模型输出转为绝对关节角。
+
+        相对模式 (use_relative_actions=true): model_output = delta → action = state + delta
+        绝对模式 (use_relative_actions=false): model_output = absolute → 直接使用
+        """
+        if self.use_relative:
+            return current_state + model_output
+        return model_output
 
     # 原子写入，避免 ROS 端读到不完整的文件
     def _write_action(self, action):
@@ -267,12 +288,14 @@ class UR3Pi0Inference:
 
                 batch = self._build_batch(joint_pos, wrist_img, global_img)
                 raw_action = self._infer(batch)
+                # 转绝对关节角 (相对模式下 raw_action 是 delta)
+                absolute_action = self._to_absolute(raw_action, joint_pos)
 
                 # ── EMA 平滑 ──
                 if ema_action is None:
-                    ema_action = raw_action.copy()
+                    ema_action = absolute_action.copy()
                 else:
-                    ema_action = ema_alpha * ema_action + (1 - ema_alpha) * raw_action
+                    ema_action = ema_alpha * ema_action + (1 - ema_alpha) * absolute_action
                 action = ema_action.copy()
 
                 self._write_action(action)
