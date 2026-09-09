@@ -1,11 +1,32 @@
 {
-  "kind": "model inference, Gazebo, not scripted demonstration or hardware",
-  "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model",
-  "episode": 1,
-  "seed": 1,
-  "outcome": "success",
-  "original_artifact": "artifacts/gazebo_pap_moe_workspace50_20260909_163606_ep0001_seed1",
-  "video_sha256": "7b96830d82826ff46f0e916dd0b45276d866dc099eab4e373f825ae00b5bfafb",
-  "edits": "none; thumbnail extracted at 5 seconds",
-  "release_stability_verified": false
+  "schema_version": 2,
+  "dataset_sample": {
+    "kind": "collected scripted demonstration visualization, not model inference",
+    "video": "workspace50_sample_0001.mp4",
+    "source": "pap_moe_framework/datasets/workspace_50_v10_canonical/pick_up_the_peg_and_insert_it_into_the_hole_episode_0001_success/data.npz",
+    "source_sha256": "ed7ed19c9705f045dad315b564782c1cd8216104c94df583c5b6ce4c9d5048ff",
+    "generator": "pap_moe_framework/scripts/pap_moe_peg_in_hole_make_video.py --raw_dir pap_moe_framework/datasets/workspace_50_v10_canonical --episode 0001 --fps 10 --output sample_0001_mp4v.mp4",
+    "frames": 290,
+    "fps": 10,
+    "duration_seconds": 29,
+    "edits": "H.264/yuv420p browser-compatible transcode; all frames retained; preview at 14 seconds",
+    "video_sha256": "ae9f101dc967a8536a54f747f9e84a824ca9ec60ae45076217a57141457aa9a4"
+  },
+  "model_rollout": {
+    "kind": "PAP-MoE model inference in Gazebo, not scripted demonstration or hardware",
+    "video": "pap_moe_success.mp4",
+    "checkpoint": "outputs/train/pap_route_adaptation_20260909_GT/checkpoints/010000/pretrained_model",
+    "routing": "Online predicted PhysicsGate; GT in checkpoint name describes training conditions, not oracle routing at inference",
+    "prediction_steps": 50,
+    "execution_steps": 10,
+    "rtc": true,
+    "episode": 31,
+    "seed": 2,
+    "outcome": "success",
+    "original_artifact": "artifacts/gazebo_pap_moe_workspace50_20260909_165332_ep0031_seed2",
+    "video_sha256": "ff7f33fe38365dedf7a252095e91d5c445ce87c29107bd4479c5615420e731ed",
+    "edits": "Original recording copied unchanged; preview extracted at 23 seconds",
+    "release_stability_verified": false,
+    "scope": "Selected successful insertion example; not an aggregate success-rate claim"
+  }
 }
