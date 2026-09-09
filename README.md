@@ -8,7 +8,7 @@
 
 ### 采集数据样本
 
-[![多模态轨迹数据可视化](docs/assets/workspace50_sample.gif)](docs/assets/workspace50_sample_0001.mp4)
+https://github.com/user-attachments/assets/f0b8adde-8b4e-4449-8877-8ed4f3a32d54
 
 [播放 / 下载数据样本视频](docs/assets/workspace50_sample_0001.mp4)
 
@@ -16,13 +16,13 @@
 
 ### PAP-MoE 闭环推理
 
-[![PAP-MoE 抓取、运输与插入](docs/assets/pap_moe_success.gif)](docs/assets/pap_moe_success.mp4)
+https://github.com/user-attachments/assets/14e1a368-4401-42cd-972a-7f089aaf1268
 
 [播放 / 下载模型推理视频](docs/assets/pap_moe_success.mp4)
 
 PAP-MoE 仿真闭环推理：自主完成抓取、运输与轴孔插入，无人工接管。
 
-动图自动循环展示，完整画质录像见 MP4 链接。
+点击播放器即可在本页观看，完整录像也可通过 MP4 链接下载。
 
 ## 主要功能
 

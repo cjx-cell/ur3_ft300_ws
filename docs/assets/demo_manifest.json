@@ -3,6 +3,7 @@
   "dataset_sample": {
     "kind": "collected scripted demonstration visualization, not model inference",
     "video": "workspace50_sample_0001.mp4",
+    "github_attachment": "https://github.com/user-attachments/assets/f0b8adde-8b4e-4449-8877-8ed4f3a32d54",
     "source": "pap_moe_framework/datasets/workspace_50_v10_canonical/pick_up_the_peg_and_insert_it_into_the_hole_episode_0001_success/data.npz",
     "source_sha256": "ed7ed19c9705f045dad315b564782c1cd8216104c94df583c5b6ce4c9d5048ff",
     "generator": "pap_moe_framework/scripts/pap_moe_peg_in_hole_make_video.py --raw_dir pap_moe_framework/datasets/workspace_50_v10_canonical --episode 0001 --fps 10 --output sample_0001_mp4v.mp4",
@@ -16,6 +17,7 @@
   "model_rollout": {
     "kind": "PAP-MoE model inference in Gazebo, not scripted demonstration or hardware",
     "video": "pap_moe_success.mp4",
+    "github_attachment": "https://github.com/user-attachments/assets/14e1a368-4401-42cd-972a-7f089aaf1268",
     "checkpoint": "outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model",
     "routing": "Online predicted PhysicsGate",
     "prediction_steps": 50,
