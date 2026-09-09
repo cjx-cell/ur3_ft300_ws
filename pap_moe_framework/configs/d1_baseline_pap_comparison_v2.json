@@ -1,0 +1,37 @@
+{
+  "schema_version": "pap_moe_d1_baseline_pap_comparison_v2",
+  "dataset": {
+    "manifest": "/home/ubuntu/ur3_ft300_ws/pap_moe_framework/datasets/manifests/pap_moe_d1_v3.json",
+    "root": "/home/ubuntu/ur3_ft300_ws/pap_moe_framework/datasets/lerobot_d1_v3",
+    "sample_weight_key": "d1.sample_weight",
+    "action_semantics": "absolute_joint_target_chunk_50x7"
+  },
+  "groups": {
+    "PI05-VS": {
+      "policy_type": "pi05",
+      "description": "true unified Pi0.5 baseline; cameras, current state and global task only"
+    },
+    "PAP-VS": {
+      "policy_type": "pap_moe",
+      "controlled_ablation_sensor_mode": "vs",
+      "description": "full four-expert PAP-MoE with FT300/history masked"
+    },
+    "PAP-VSF": {
+      "policy_type": "pap_moe",
+      "controlled_ablation_sensor_mode": "vsf",
+      "description": "full four-expert PAP-MoE with FT300 and causal joint history"
+    }
+  },
+  "interpretation": {
+    "PI05-VS_vs_PAP-VS": "architecture effect without force/history",
+    "PAP-VS_vs_PAP-VSF": "force/history effect inside PAP-MoE",
+    "PI05-VS_vs_PAP-VSF": "primary system comparison; architecture and modality change jointly"
+  },
+  "constraints": [
+    "Single-PAP is forbidden",
+    "074701 pseudo-target states are excluded from authoritative D1",
+    "D1 sample weights are applied exactly once",
+    "no attach, oracle, replay, MoveIt or online object-truth action correction",
+    "end-of-stage checkpoints are fixed before online evaluation"
+  ]
+}

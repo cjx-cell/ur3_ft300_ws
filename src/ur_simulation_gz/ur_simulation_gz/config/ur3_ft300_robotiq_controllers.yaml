@@ -9,9 +9,53 @@ controller_manager:
     joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
+    arm_servo_controller:
+      type: position_controllers/JointGroupPositionController
+
+    gripper_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
     # FT Sensor Broadcaster
     force_torque_sensor_broadcaster:
       type: force_torque_sensor_broadcaster/ForceTorqueSensorBroadcaster
+
+# Humble gz_ros2_control reads this from its ROS node parameters, not from
+# the SDF plugin child element. 0.5 removes the 0.15 rad payload tracking lag
+# observed with the package default of 0.1.
+gz_ros2_control:
+  ros__parameters:
+    position_proportional_gain: 0.5
+
+# Teleoperation v2 controllers.  The six-axis direct position controller is
+# the controller contract recommended for continuous MoveIt Servo commands;
+# the separate gripper JTC eliminates arm/gripper command preemption.
+arm_servo_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    interface_name: position
+
+gripper_trajectory_controller:
+  ros__parameters:
+    joints:
+      - robotiq_85_left_knuckle_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 5.0
+      robotiq_85_left_knuckle_joint: {trajectory: 5.0, goal: 0.20}
 
 
 # Unified controller: 7 joints (6 arm + left_knuckle). Mimic joints handled by gz_ros2_control mimic params.
@@ -40,17 +84,26 @@ joint_trajectory_controller:
       wrist_1_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
       wrist_2_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
       wrist_3_joint: {p: 50.0, i: 0.0, d: 2.5, ff_velocity_scale: 1.0}
-      robotiq_85_left_knuckle_joint: {p: 200.0, i: 0.0, d: 10.0, ff_velocity_scale: 1.0, i_clamp: 0.1}
+      robotiq_85_left_knuckle_joint: {p: 2000.0, i: 0.0, d: 50.0, ff_velocity_scale: 1.0, i_clamp: 0.1}
     constraints:
       stopped_velocity_tolerance: 0.05
-      goal_time: 1.0
-      shoulder_pan_joint: { trajectory: 2.0, goal: 0.1 }
-      shoulder_lift_joint: { trajectory: 2.0, goal: 0.1 }
-      elbow_joint: { trajectory: 2.0, goal: 0.1 }
-      wrist_1_joint: { trajectory: 2.0, goal: 0.1 }
-      wrist_2_joint: { trajectory: 2.0, goal: 0.1 }
-      wrist_3_joint: { trajectory: 2.0, goal: 0.1 }
-      robotiq_85_left_knuckle_joint: { trajectory: 5.0, goal: 0.05 }
+      # Preserve the 0.1 rad accuracy gate, but allow the payload-bearing
+      # wrist to settle instead of aborting one second after trajectory end.
+      goal_time: 5.0
+      # Chunk policies immediately replan from measured state.  A 0.15-rad
+      # goal tolerance avoids aborting a valid payload-bearing chunk for the
+      # 0.10--0.12 rad residual created by gripper contact, while the ROS-side
+      # training-envelope and per-step guards remain active.
+      shoulder_pan_joint: { trajectory: 2.0, goal: 0.15 }
+      shoulder_lift_joint: { trajectory: 2.0, goal: 0.15 }
+      elbow_joint: { trajectory: 2.0, goal: 0.15 }
+      wrist_1_joint: { trajectory: 2.0, goal: 0.15 }
+      wrist_2_joint: { trajectory: 2.0, goal: 0.15 }
+      wrist_3_joint: { trajectory: 2.0, goal: 0.15 }
+      # A full-close command legitimately stops before 0.8 rad when an object
+      # is held.  This tolerance accepts that contact outcome; release is
+      # still checked explicitly against the measured fully-open position.
+      robotiq_85_left_knuckle_joint: { trajectory: 5.0, goal: 0.20 }
 
 # FT Sensor Broadcaster Configuration
 force_torque_sensor_broadcaster:

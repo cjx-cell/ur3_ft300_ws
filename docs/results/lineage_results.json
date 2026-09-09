@@ -1,0 +1,151 @@
+{
+  "source": "artifacts/deployment_validation_20260909_s4_success_lineage",
+  "selection": "four historical S4 successes; NOT population success-rate estimate",
+  "contract": "50/10 RTC, fresh-read gripper plugin, 120 simulation seconds",
+  "rows": [
+    {
+      "eval_label": "S4",
+      "episode": 1,
+      "seed": 1,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model"
+    },
+    {
+      "eval_label": "S4",
+      "episode": 31,
+      "seed": 2,
+      "success": false,
+      "outcome": "out_of_distribution",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model"
+    },
+    {
+      "eval_label": "S4",
+      "episode": 41,
+      "seed": 1,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model"
+    },
+    {
+      "eval_label": "S4",
+      "episode": 41,
+      "seed": 2,
+      "success": false,
+      "outcome": "timeout",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model"
+    },
+    {
+      "eval_label": "B",
+      "episode": 1,
+      "seed": 1,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "B",
+      "episode": 31,
+      "seed": 2,
+      "success": false,
+      "outcome": "out_of_distribution",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "B",
+      "episode": 41,
+      "seed": 1,
+      "success": false,
+      "outcome": "timeout",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "B",
+      "episode": 41,
+      "seed": 2,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "GT",
+      "episode": 1,
+      "seed": 1,
+      "success": false,
+      "outcome": "timeout",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_GT/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "GT",
+      "episode": 31,
+      "seed": 2,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_GT/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "GT",
+      "episode": 41,
+      "seed": 1,
+      "success": false,
+      "outcome": "out_of_distribution",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_GT/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "GT",
+      "episode": 41,
+      "seed": 2,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_GT/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "Pred",
+      "episode": 1,
+      "seed": 1,
+      "success": true,
+      "outcome": "success",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_Pred/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "Pred",
+      "episode": 31,
+      "seed": 2,
+      "success": false,
+      "outcome": "timeout",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_Pred/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "Pred",
+      "episode": 41,
+      "seed": 1,
+      "success": false,
+      "outcome": "out_of_distribution",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_Pred/checkpoints/010000/pretrained_model"
+    },
+    {
+      "eval_label": "Pred",
+      "episode": 41,
+      "seed": 2,
+      "success": false,
+      "outcome": "timeout",
+      "evaluation_valid": true,
+      "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_route_adaptation_20260909_Pred/checkpoints/010000/pretrained_model"
+    }
+  ]
+}

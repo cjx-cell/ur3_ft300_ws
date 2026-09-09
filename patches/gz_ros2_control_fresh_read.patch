@@ -1,0 +1,172 @@
+--- a/gz_ros2_control/src/gz_system.cpp
++++ b/gz_ros2_control/src/gz_system.cpp
+@@ -15,6 +15,7 @@
+ #include "gz_ros2_control/gz_system.hpp"
+ 
+ #include <array>
++#include <cmath>
+ #include <cstddef>
+ #include <limits>
+ #include <map>
+@@ -111,6 +112,15 @@
+   /// \brief Current cmd joint effort
+   double joint_effort_cmd;
+ 
++  /// Simulated motor-current limit for the Robotiq master knuckle. The
++  /// high-level command remains the generic fully-closed endpoint while a
++  /// sustained contact stall brakes the actuator at the achieved position.
++  bool contact_stop_latched{false};
++  std::size_t contact_stall_cycles{0};
++  // Count independent sensor reads, not repeated writes between two reads.
++  std::size_t state_read_sequence{0};
++  std::size_t contact_last_read_sequence{0};
++
+   /// \brief flag if joint is actuated (has command interfaces) or passive
+   bool is_actuated;
+ 
+@@ -263,7 +273,11 @@
+ 
+   this->dataPtr->joints_.resize(this->dataPtr->n_dof_);
+ 
+-  constexpr double default_gain = 0.1;
++  // PAP-MoE Gazebo uses position-only ros2_control commands at 100 Hz.
++  // The Humble default of 0.1 leaves ~0.15 rad goal error under a grasped
++  // 0.5--2.0 kg peg and causes valid JTC trajectories to abort. Keep this
++  // overlay explicit until upstream parameter initialization is fixed.
++  constexpr double default_gain = 0.5;
+ 
+   try {
+     this->dataPtr->position_proportional_gain_ = this->nh_->declare_parameter<double>(
+@@ -389,7 +403,10 @@
+                   << mimicked_joint << "' with multiplier: "
+                   << mimic_joint.multiplier);
+       this->dataPtr->mimic_joints_.push_back(mimic_joint);
+-      suffix = "_mimic";
++      // Export the physical URDF joint name.  Appending "_mimic" prevents
++      // robot_state_publisher, MoveIt and dataset validators from associating
++      // the measured passive linkage state with its real joint.
++      suffix = "";
+     }
+ 
+     RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tState:");
+@@ -719,6 +736,7 @@
+ 
+     this->dataPtr->joints_[i].joint_position = jointPositions->Data()[0];
+     this->dataPtr->joints_[i].joint_velocity = jointVelocity->Data()[0];
++    ++this->dataPtr->joints_[i].state_read_sequence;
+     GZ_PHYSICS_NAMESPACE Vector3d force_or_torque;
+     if (this->dataPtr->joints_[i].joint_type == sdf::JointType::PRISMATIC) {
+       force_or_torque = {jointWrench->Data().force().x(),
+@@ -810,6 +828,15 @@
+   const rclcpp::Time & /*time*/,
+   const rclcpp::Duration & /*period*/)
+ {
++  // Allow contact-aware controllers to reduce the position servo stiffness
++  // at runtime.  This changes the actuator response only; it does not add a
++  // spring or compliant body to the simulated fixture.
++  double configured_gain = this->dataPtr->position_proportional_gain_;
++  if (this->nh_->get_parameter("position_proportional_gain", configured_gain)) {
++    this->dataPtr->position_proportional_gain_ =
++      std::clamp(configured_gain, 0.01, 1.0);
++  }
++
+   for (unsigned int i = 0; i < this->dataPtr->joints_.size(); ++i) {
+     if (this->dataPtr->joints_[i].sim_joint == sim::kNullEntity) {
+       continue;
+@@ -835,8 +862,58 @@
+       error = (this->dataPtr->joints_[i].joint_position -
+         this->dataPtr->joints_[i].joint_position_cmd) * *this->dataPtr->update_rate;
+ 
+-      // Calculate target velcity
++      // Position interfaces are implemented as velocity servos in Gazebo, so
++      // enforce the joint's URDF velocity limit here.  Large position steps
++      // (especially a full gripper stroke) must not destabilize mimic joints
++      // and contact by bypassing the model limit.
+       double target_vel = -this->dataPtr->position_proportional_gain_ * error;
++      const bool is_robotiq_master =
++        this->dataPtr->joints_[i].name == "robotiq_85_left_knuckle_joint";
++      if (is_robotiq_master) {
++        auto & joint = this->dataPtr->joints_[i];
++        const bool fresh_state =
++          joint.state_read_sequence != joint.contact_last_read_sequence;
++        joint.contact_last_read_sequence = joint.state_read_sequence;
++        const double closing_error =
++          joint.joint_position_cmd - joint.joint_position;
++        const double opening_error = -closing_error;
++        // Opening always releases the simulated motor brake. During closing,
++        // latch only after several consecutive 100 Hz cycles with a large
++        // remaining position error but near-zero measured motion. A newly
++        // received trajectory has zero measured velocity on its first update;
++        // treating that single cycle as contact falsely locks a freely moving
++        // gripper at the fully-open endpoint.
++        // This represents the
++        // Robotiq current/force limit and is independent of object geometry.
++        if (opening_error > 0.02) {
++          joint.contact_stop_latched = false;
++          joint.contact_stall_cycles = 0;
++        } else if (!joint.contact_stop_latched && closing_error > 0.03 && fresh_state) {
++          if (std::abs(joint.joint_velocity) < 0.10) {
++            ++joint.contact_stall_cycles;
++          } else {
++            joint.contact_stall_cycles = 0;
++          }
++          if (joint.contact_stall_cycles >= 5) {
++            joint.contact_stop_latched = true;
++            RCLCPP_INFO_STREAM(
++              this->nh_->get_logger(),
++              "Robotiq contact stop latched at " << joint.joint_position <<
++                " rad while endpoint command remains " <<
++                joint.joint_position_cmd << " rad");
++          }
++        } else if (closing_error <= 0.03) {
++          joint.contact_stall_cycles = 0;
++        }
++        if (joint.contact_stop_latched && closing_error > -0.02) {
++          target_vel = 0.0;
++        }
++      }
++      const double max_velocity =
++        this->dataPtr->joints_[i].joint_axis.MaxVelocity();
++      if (std::isfinite(max_velocity) && max_velocity > 0.0) {
++        target_vel = std::clamp(target_vel, -max_velocity, max_velocity);
++      }
+ 
+       auto vel =
+         this->dataPtr->ecm->Component<sim::components::JointVelocityCmd>(
+@@ -889,14 +966,28 @@
+           this->dataPtr->ecm->Component<sim::components::JointPosition>(
+           this->dataPtr->joints_[mimic_joint.mimicked_joint_index].sim_joint)->Data()[0];
+ 
+-        double position_mimic_joint =
+-          this->dataPtr->ecm->Component<sim::components::JointPosition>(
+-          this->dataPtr->joints_[mimic_joint.joint_index].sim_joint)->Data()[0];
+-
+-        double position_error =
+-          position_mimic_joint - position_mimicked_joint * mimic_joint.multiplier;
+-
+-        double velocity_sp = (-1.0) * position_error * (*this->dataPtr->update_rate);
++        // A real 2F-85 is a closed four-bar linkage.  Treating its passive
++        // links as five independent velocity servos lets numerical/contact
++        // errors deform the mechanism.  Enforce the exact kinematic relation
++        // at every ros2_control update and use the master's measured velocity
++        // only to interpolate smoothly between updates.
++        const double target_position =
++          position_mimicked_joint * mimic_joint.multiplier;
++        auto position_reset =
++          this->dataPtr->ecm->Component<sim::components::JointPositionReset>(
++          this->dataPtr->joints_[mimic_joint.joint_index].sim_joint);
++        if (position_reset == nullptr) {
++          this->dataPtr->ecm->CreateComponent(
++            this->dataPtr->joints_[mimic_joint.joint_index].sim_joint,
++            sim::components::JointPositionReset({target_position}));
++        } else {
++          *position_reset = sim::components::JointPositionReset({target_position});
++        }
++        const double master_velocity =
++          this->dataPtr->ecm->Component<sim::components::JointVelocity>(
++          this->dataPtr->joints_[mimic_joint.mimicked_joint_index].sim_joint)->Data()[0];
++        const double velocity_sp =
++          master_velocity * mimic_joint.multiplier;
+ 
+         auto vel =
+           this->dataPtr->ecm->Component<sim::components::JointVelocityCmd>(

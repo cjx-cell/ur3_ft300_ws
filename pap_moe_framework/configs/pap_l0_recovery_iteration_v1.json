@@ -1,0 +1,51 @@
+{
+  "schema_version": "pap_moe_l0_recovery_iteration_v1",
+  "objective": "make full PAP-MoE close fixed episode 13001 before formal ablation",
+  "source_checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_moe_v9_conditioner_20260808_021028/checkpoints/001000/pretrained_model",
+  "dataset": "/home/ubuntu/ur3_ft300_ws/pap_moe_framework/datasets/lerobot_d1_v3",
+  "initial_adaptation": [
+    {"stage": "expert", "steps": 3000, "teacher_routing": true},
+    {"stage": "gate_calibration", "steps": 1000},
+    {"stage": "conditioner", "steps": 1000},
+    {"stage": "action_adapter", "steps": 300}
+  ],
+  "rollout_contract": {
+    "episode": 13001,
+    "execute_steps": 10,
+    "rtc": false,
+    "attach": false,
+    "demo_recovery": false,
+    "online_object_truth": false,
+    "handwritten_fsm": false
+  },
+  "iteration": [
+    "train fixed stage endpoints",
+    "run pure PAP-MoE rollout on frozen L0 seeds",
+    "identify earliest stable failure stage",
+    "collect independent takeover recovery with rollout_recovery_v3_multitask_full_modalities",
+    "append only schema-qualified recovery to next dataset version",
+    "repeat until at least 10 held-out L0 seeds pass"
+  ],
+  "new_data_admission_gate": {
+    "schema_version": "pap_moe_rollout_recovery_v3_multitask_full_modalities",
+    "required_native_modalities": [
+      "camera0", "camera1", "state", "state_history_10x7",
+      "ft300_current_6", "ft300_fast_64x6", "ft300_slow_50x6",
+      "visual_quality", "modality_validity_all_ones"
+    ],
+    "required_supervision": [
+      "policy_action", "expert_action", "executed_action", "requested_action",
+      "controller_action", "intervention_mask", "semantic_subtask",
+      "skill_progress_phase", "skill_progress", "transition_readiness",
+      "skill_progress_valid", "skill_progress_label_source",
+      "skill_progress_confidence", "physics_stage_target"
+    ],
+    "missing_modality_policy": "reject_entire_episode",
+    "legacy_v1_allowed_in_d2": false
+  },
+  "deferred_until_pap_closure": [
+    "true Pi0.5 versus PAP-MoE formal ablation",
+    "workspace-range L1 expansion",
+    "074701 pseudo-label ablation"
+  ]
+}

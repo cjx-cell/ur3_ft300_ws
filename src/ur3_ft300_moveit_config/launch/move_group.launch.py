@@ -21,6 +21,13 @@ def generate_launch_description():
     move_group_params = [
         moveit_config.to_dict(),
         move_group_configuration,
+        {
+            # Planned trajectory stamps use simulation time. Camera rendering
+            # can reduce Gazebo below real time, so the default wall-clock
+            # execution monitor otherwise cancels a healthy active JTC goal.
+            "trajectory_execution.allowed_execution_duration_scaling": 3.0,
+            "trajectory_execution.allowed_goal_duration_margin": 2.0,
+        },
         {"use_sim_time": True},
     ]
 
@@ -28,7 +35,7 @@ def generate_launch_description():
         package="moveit_ros_move_group",
         executable="move_group",
         parameters=move_group_params,
-        arguments=["--ros-args", "--log-level", "tf2_buffer:=error"],
+        arguments=["--ros-args", "--log-level", "error"],
         output="screen",
     )
 

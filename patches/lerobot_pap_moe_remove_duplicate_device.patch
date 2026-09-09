@@ -1,0 +1,10 @@
+--- a/src/lerobot/policies/pap_moe/processor_pap_moe.py
++++ b/src/lerobot/policies/pap_moe/processor_pap_moe.py
+@@ -135,7 +135,6 @@ def make_pap_moe_pre_post_processors(
+     ]
+ 
+     output_steps: list[ProcessorStep] = [
+-        DeviceProcessorStep(device="cpu"),
+         UnnormalizerProcessorStep(
+             features=config.output_features,
+             norm_map=config.normalization_mapping,

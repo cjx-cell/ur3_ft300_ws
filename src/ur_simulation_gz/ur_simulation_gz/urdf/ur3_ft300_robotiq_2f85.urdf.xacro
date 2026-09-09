@@ -37,6 +37,7 @@
   <xacro:arg name="use_fake_hardware" default="true"/>
   <xacro:arg name="fake_sensor_commands" default="false"/>
   <xacro:arg name="sim_ignition" default="false"/>
+  <xacro:arg name="sim_position_gain" default="0.1"/>
 
   <!-- Robotiq gripper parameters -->
   <xacro:arg name="gripper_use_fake_hardware" default="true"/>
@@ -98,7 +99,11 @@
   <!-- Realsense D435i Camera (wrist-mounted) -->
   <!-- ================================================================ -->
   <xacro:sensor_d435i parent="$(arg tf_prefix)wrist_3_link" name="wrist_camera" use_nominal_extrinsics="true">
-    <origin xyz="0.08 0.025 -0.02" rpy="0 -${pi/2.5} ${pi}"/>
+    <!-- Mount on the opposite side of the gripper to keep the camera body
+         out of the tabletop collision corridor.  This is the old mount
+         transformed by a 180-degree rotation about the wrist/gripper axis,
+         so the optical view remains directed inward at the work area. -->
+    <origin xyz="-0.105 -0.025 -0.005" rpy="0 -${pi/2.5} 0"/>
   </xacro:sensor_d435i>
 
   <!-- ================================================================ -->
@@ -106,7 +111,11 @@
   <!-- ================================================================ -->
   <link name="global_camera_mount"/>
   <joint name="global_camera_mount_joint" type="fixed">
-    <origin xyz="-0.04 1.0 1.4" rpy="0 ${pi/5} -${pi/2}"/>
+    <!-- LIBERO-style oblique global view, rotated with the canonical table.
+         The camera is on the far +X side looking back/down toward the UR3.
+         The optical image remains upright; the teleop frontend maps W/S and
+         A/D into this camera frame while retaining height cues. -->
+    <origin xyz="0.75 0 1.45" rpy="0 ${pi/3} -${pi}"/>
     <parent link="world"/>
     <child link="global_camera_mount"/>
   </joint>
@@ -123,13 +132,16 @@
   <gazebo reference="wrist_camera_link">
     <sensor type="camera" name="wrist_camera_sensor">
       <always_on>1</always_on>
-      <update_rate>50</update_rate>
+      <!-- Policy data is sampled at 10 Hz and resized to 224x224.  A 320x240
+           4:3 render preserves the calibrated field of view while avoiding
+           the cost of rendering pixels discarded by preprocessing. -->
+      <update_rate>12</update_rate>
       <pose>0 0.015 0 0 0 0</pose>
       <camera>
-        <horizontal_fov>1.210</horizontal_fov>
+        <horizontal_fov>1.047</horizontal_fov>
         <image>
-          <width>640</width>
-          <height>480</height>
+          <width>320</width>
+          <height>240</height>
           <format>R8G8B8</format>
         </image>
         <clip>
@@ -144,13 +156,15 @@
   <gazebo reference="global_camera_link">
     <sensor type="camera" name="global_camera_sensor">
       <always_on>1</always_on>
-      <update_rate>50</update_rate>
+      <update_rate>12</update_rate>
       <pose>0 0.015 0 0 0 0</pose>
       <camera>
-        <horizontal_fov>1.134</horizontal_fov>
+        <!-- Wide global context: cover the complete tabletop/UR3 workspace,
+             not only the current narrow peg/hole curriculum boxes. -->
+        <horizontal_fov>1.25</horizontal_fov>
         <image>
-          <width>640</width>
-          <height>480</height>
+          <width>320</width>
+          <height>240</height>
           <format>R8G8B8</format>
         </image>
         <clip>
@@ -174,7 +188,8 @@
       <param name="position_proportional_gain">5.0</param>
       <command_interface name="position"/>
       <state_interface name="position">
-        <param name="initial_value">0.0</param>
+        <!-- Image-left tabletop HOME; remaining joints keep tool vertical. -->
+        <param name="initial_value">-1.254</param>
       </state_interface>
       <state_interface name="velocity"/>
     </joint>
@@ -227,22 +242,32 @@
     <joint name="robotiq_85_right_knuckle_joint">
       <param name="mimic">robotiq_85_left_knuckle_joint</param>
       <param name="multiplier">-1</param>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
     <joint name="robotiq_85_left_inner_knuckle_joint">
       <param name="mimic">robotiq_85_left_knuckle_joint</param>
       <param name="multiplier">1</param>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
     <joint name="robotiq_85_right_inner_knuckle_joint">
       <param name="mimic">robotiq_85_left_knuckle_joint</param>
       <param name="multiplier">-1</param>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
     <joint name="robotiq_85_left_finger_tip_joint">
       <param name="mimic">robotiq_85_left_knuckle_joint</param>
       <param name="multiplier">-1</param>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
     <joint name="robotiq_85_right_finger_tip_joint">
       <param name="mimic">robotiq_85_left_knuckle_joint</param>
       <param name="multiplier">1</param>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
     <sensor name="robotiq_ft300_sensor">
       <state_interface name="force.x"/>
@@ -269,12 +294,36 @@
     </sensor>
   </gazebo>
 
+  <gazebo reference="robotiq_85_left_finger_tip_link">
+    <mu1>5.0</mu1>
+    <mu2>5.0</mu2>
+    <!-- Approximate compliant Robotiq pads; the previous rigid 1e6 N/m
+         contact injected tens of newtons of asymmetric preload. -->
+    <kp>10000.0</kp>
+    <kd>50.0</kd>
+    <!-- Override the upstream fingertip collision's 2 mm minimum contact
+         depth and unbounded correction velocity. Those defaults generated a
+         sustained ~150 N squeeze transient in DART at first peg contact. -->
+    <minDepth>0.00005</minDepth>
+    <maxVel>0.001</maxVel>
+  </gazebo>
+  <gazebo reference="robotiq_85_right_finger_tip_link">
+    <mu1>5.0</mu1>
+    <mu2>5.0</mu2>
+    <kp>10000.0</kp>
+    <kd>50.0</kd>
+    <minDepth>0.00005</minDepth>
+    <maxVel>0.001</maxVel>
+  </gazebo>
+
   <gazebo>
     <plugin filename="gz_ros2_control-system"
             name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(find ur_simulation_gz)/config/ur3_ft300_robotiq_controllers.yaml</parameters>
       <controller_manager_name>controller_manager</controller_manager_name>
+      <!-- GazeboSimSystem maps position error to joint velocity with this
+           global gain; per-joint ros2_control hardware params are ignored. -->
+      <position_proportional_gain>$(arg sim_position_gain)</position_proportional_gain>
     </plugin>
   </gazebo>
 </robot>
-

@@ -1,9 +1,9 @@
 <sdf version='1.9'>
   <world name='simulation_world'>
-    <physics name='3ms' type='ignored'>
-      <max_step_size>0.003</max_step_size>
+    <physics name='2ms_contact' type='ignored'>
+      <max_step_size>0.002</max_step_size>
       <real_time_factor>1</real_time_factor>
-      <real_time_update_rate>333</real_time_update_rate>
+      <real_time_update_rate>500</real_time_update_rate>
     </physics>
     <plugin name='gz::sim::systems::Physics' filename='ignition-gazebo-physics-system'/>
     <plugin name='gz::sim::systems::UserCommands' filename='ignition-gazebo-user-commands-system'/>
@@ -71,7 +71,10 @@
     <include>
       <uri>file:///home/ubuntu/.gazebo/models/cafe_table</uri>
       <name>cafe_table</name>
-      <pose>0 0.35 0 0 -0 0</pose>
+      <!-- Canonical UR3 task frame: the tabletop extends from the robot base
+           along +X.  This makes base-frame Cartesian motion, camera motion
+           and task coordinates share one stable convention. -->
+      <pose>0.35 0 0 0 -0 0</pose>
     </include>
     <light name='sun' type='directional'>
       <pose>0 0 10 0 -0 0</pose>

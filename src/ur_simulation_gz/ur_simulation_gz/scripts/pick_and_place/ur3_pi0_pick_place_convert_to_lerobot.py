@@ -7,7 +7,7 @@
   python3 ur3_convert_to_lerobot.py --input ~/ur3_dataset --repo_id my_ur3_data
 """
 
-import argparse, os, json, time
+import argparse, os, json, sys, time
 import numpy as np
 from pathlib import Path
 
@@ -34,6 +34,80 @@ def find_episodes(input_dir):
             if os.path.exists(npz_path):
                 episodes.append(npz_path)
     return episodes
+
+
+def _fix_action_stats_for_relative(dataset_root):
+    """Recompute action stats as delta = action - state for relative mode."""
+    import json, shutil
+    import numpy as np
+
+    stats_path = Path(dataset_root) / "meta" / "stats.json"
+    if not stats_path.exists():
+        print("  [stats fix] No stats.json, skipping")
+        return
+
+    # Find all parquet files
+    parquet_files = sorted(Path(dataset_root).glob("data/chunk-*/file-*.parquet"))
+    if not parquet_files:
+        print("  [stats fix] No parquet files, skipping")
+        return
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        print("  [stats fix] pyarrow not available, skipping")
+        return
+
+    # Backup original
+    backup = stats_path.with_suffix(".json.abs_backup")
+    if not backup.exists():
+        shutil.copy(stats_path, backup)
+
+    # Read ALL parquet files and concatenate
+    actions_list, states_list = [], []
+    for pf_path in parquet_files:
+        pf = pq.read_table(str(pf_path))
+        actions_list.append(np.stack(pf.column("action").to_pylist()))
+        states_list.append(np.stack(pf.column("observation.state").to_pylist()))
+    actions = np.concatenate(actions_list, axis=0)
+    states = np.concatenate(states_list, axis=0)
+    delta = actions - states
+    EXCLUDE = [6]  # gripper
+
+    with open(stats_path) as f:
+        stats = json.load(f)
+
+    old_action = stats["action"]
+    new_vals = {}
+
+    for key in ["mean", "std", "min", "max"]:
+        arr = np.zeros(7, dtype=np.float32)
+        for i in range(7):
+            src = actions[:, i] if i in EXCLUDE else delta[:, i]
+            if key == "mean": arr[i] = src.mean()
+            elif key == "std": arr[i] = max(src.std(), 1e-8)
+            elif key == "min": arr[i] = src.min()
+            elif key == "max": arr[i] = src.max()
+        new_vals[key] = arr
+
+    for q in [0.01, 0.10, 0.50, 0.90, 0.99]:
+        key = f"q{int(q * 100):02d}"
+        arr = np.zeros(7, dtype=np.float32)
+        for i in range(7):
+            src = actions[:, i] if i in EXCLUDE else delta[:, i]
+            arr[i] = np.quantile(src, q)
+        new_vals[key] = arr
+
+    for key, arr in new_vals.items():
+        if key in old_action:
+            old_action[key] = arr.tolist()
+    stats["action"] = old_action
+
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
+
+    arm_std = float(new_vals["std"][:6].mean())
+    print(f"  [stats fix] Action stats → relative delta (arm std={arm_std:.4f}, backup at .abs_backup)")
 
 
 def main():
@@ -145,6 +219,9 @@ def main():
     dataset.finalize()
     print(f"\n数据集已创建: {total_frames} 帧, {len(episodes)} episodes, "
           f"耗时 {time.time()-t0:.1f}s")
+
+    # Fix action stats for relative mode (delta = action - state)
+    _fix_action_stats_for_relative(dataset.root)
 
     stats = getattr(dataset, "stats", None)
     if not stats:

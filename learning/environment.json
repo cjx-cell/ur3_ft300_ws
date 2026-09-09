@@ -1,0 +1,17 @@
+{
+  "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:20:58) [GCC 14.3.0]",
+  "packages": {
+    "torch": "2.10.0",
+    "torchvision": "0.25.0",
+    "transformers": "5.6.0",
+    "lerobot": "0.5.2",
+    "numpy": "2.2.6",
+    "safetensors": "0.8.0",
+    "accelerate": "1.14.0",
+    "peft": "0.19.1"
+  },
+  "ros": "Humble",
+  "gazebo": "Fortress",
+  "os": "Ubuntu 22.04",
+  "note": "Observed environment, not a full dependency lockfile."
+}

@@ -67,6 +67,8 @@ def main():
     merged_count = 0
     for target, tensors in lora_pairs.items():
         base_key = target.replace("base_model.model.", "") + ".weight"
+        # Fix vision tower key: LoRA has vision_tower.encoder but base has vision_tower.vision_model.encoder
+        base_key = base_key.replace(".vision_tower.encoder.", ".vision_tower.vision_model.encoder.")
 
         if "A" in tensors and "B" in tensors:
             lora_A = tensors["A"]

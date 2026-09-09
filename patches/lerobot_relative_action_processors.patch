@@ -1,0 +1,121 @@
+--- a/src/lerobot/policies/pi05/configuration_pi05.py
++++ b/src/lerobot/policies/pi05/configuration_pi05.py
+@@ -68,6 +68,7 @@
+     empty_cameras: int = 0
+ 
+     tokenizer_max_length: int = 200  # see openpi `__post_init__`
++    tokenizer_name: str = "google/paligemma-3b-pt-224"
+ 
+     normalization_mapping: dict[str, NormalizationMode] = field(
+         default_factory=lambda: {
+--- a/src/lerobot/policies/pi05/processor_pi05.py
++++ b/src/lerobot/policies/pi05/processor_pi05.py
+@@ -149,7 +149,7 @@
+         ),
+         Pi05PrepareStateTokenizerProcessorStep(max_state_dim=config.max_state_dim),
+         TokenizerProcessorStep(
+-            tokenizer_name="google/paligemma-3b-pt-224",
++            tokenizer_name=config.tokenizer_name,
+             max_length=config.tokenizer_max_length,
+             padding_side="right",
+             padding="max_length",
+--- a/src/lerobot/policies/pap_moe/processor_pap_moe.py
++++ b/src/lerobot/policies/pap_moe/processor_pap_moe.py
+@@ -10,7 +10,7 @@
+ import numpy as np
+ import torch
+ 
+-from lerobot.configs import PipelineFeatureType, PolicyFeature
++from lerobot.configs import FeatureType, NormalizationMode, PipelineFeatureType, PolicyFeature
+ from lerobot.processor import (
+     AbsoluteActionsProcessorStep,
+     AddBatchDimensionProcessorStep,
+@@ -25,11 +25,16 @@
+     TokenizerProcessorStep,
+     UnnormalizerProcessorStep,
+ )
++from lerobot.processor.converters import (
++    policy_action_to_transition,
++    transition_to_policy_action,
++)
+ from lerobot.types import EnvTransition, TransitionKey
+ from lerobot.utils.constants import (
+     OBS_STATE,
++    POLICY_POSTPROCESSOR_DEFAULT_NAME,
++    POLICY_PREPROCESSOR_DEFAULT_NAME,
+ )
+-from ..pi05.processor_pi05 import make_pi05_pre_post_processors
+ from .configuration_pap_moe import PAPMoEConfig, OBS_STAGE, OBS_FORCE
+ 
+ 
+@@ -96,30 +101,35 @@
+         action_names=getattr(config, "action_feature_names", None),
+     )
+ 
+-    # Force and Stage override custom normalizations:
+-    norm_map = deepcopy(config.normalization_mapping)
+-    # Stage should NOT be normalized
+-    norm_map[OBS_STAGE] = "IDENTITY"
+-    # Force is normalized by MEAN_STD
+-    norm_map[OBS_FORCE] = "MEAN_STD"
++    model_features = {
++        key: feature
++        for key, feature in config.input_features.items()
++        if key not in (OBS_FORCE, OBS_STAGE)
++    } | config.output_features
+ 
+     input_steps: list[ProcessorStep] = [
+         RenameObservationsProcessorStep(rename_map={}),
+         AddBatchDimensionProcessorStep(),
+         relative_step,
+         NormalizerProcessorStep(
+-            features={**config.input_features, **config.output_features},
+-            norm_map=norm_map,
++            features=model_features,
++            norm_map=config.normalization_mapping,
++            stats=dataset_stats,
++        ),
++        NormalizerProcessorStep(
++            features={OBS_FORCE: config.input_features[OBS_FORCE]},
++            norm_map={FeatureType.STATE: NormalizationMode.MEAN_STD},
+             stats=dataset_stats,
+         ),
+         # Convert stage to subtask names and prepare prompt
+         PapMoePrepareStateTokenizerProcessorStep(
+-            max_state_dim=config.max_state_dim,
+-            subtask_names=tuple(config.subtask_names)
++            max_state_dim=config.max_state_dim
+         ),
+         TokenizerProcessorStep(
+-            tokenizer_name_or_path=config.pretrained_model_name_or_path,
++            tokenizer_name=config.tokenizer_name,
+             max_length=config.tokenizer_max_length,
++            padding_side="right",
++            padding="max_length",
+         ),
+         DeviceProcessorStep(device=config.device),
+     ]
+@@ -133,9 +143,20 @@
+         ),
+         AbsoluteActionsProcessorStep(
+             enabled=config.use_relative_actions,
+-            exclude_joints=getattr(config, "relative_exclude_joints", []),
+-            action_names=getattr(config, "action_feature_names", None),
++            relative_step=relative_step,
+         ),
++        DeviceProcessorStep(device="cpu"),
+     ]
+ 
+-    return PolicyProcessorPipeline(input_steps), PolicyProcessorPipeline(output_steps)
++    return (
++        PolicyProcessorPipeline[dict[str, Any], dict[str, Any]](
++            steps=input_steps,
++            name=POLICY_PREPROCESSOR_DEFAULT_NAME,
++        ),
++        PolicyProcessorPipeline[PolicyAction, PolicyAction](
++            steps=output_steps,
++            name=POLICY_POSTPROCESSOR_DEFAULT_NAME,
++            to_transition=policy_action_to_transition,
++            to_output=transition_to_policy_action,
++        ),
++    )

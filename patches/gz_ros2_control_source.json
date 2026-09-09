@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/ros-controls/gz_ros2_control.git",
+  "commit": "65ef38b989718a58ec9a6c55b5c899039acccd84",
+  "patch": "gz_ros2_control_fresh_read.patch",
+  "status": "validated isolated candidate; not silently installed into default workspace"
+}

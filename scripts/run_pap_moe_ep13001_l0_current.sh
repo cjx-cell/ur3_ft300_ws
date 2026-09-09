@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Fixed-L0 PAP-MoE rollout with the shared baseline/PAP RTC inference contract.
+set -euo pipefail
+
+WS_DIR="/home/ubuntu/ur3_ft300_ws"
+CHECKPOINT="${PAP_MOE_CHECKPOINT:?Set PAP_MOE_CHECKPOINT to the candidate pretrained_model directory}"
+export PAP_MOE_CHECKPOINT="$CHECKPOINT"
+export PAP_MOE_SEED="${PAP_MOE_SEED:-0}"
+export PAP_MOE_EXECUTE_STEPS=10
+export PAP_MOE_RTC_ENABLED="${PAP_MOE_RTC_ENABLED:-true}"
+export PAP_MOE_RTC_EXECUTION_HORIZON="${PAP_MOE_RTC_EXECUTION_HORIZON:-10}"
+export PAP_MOE_RTC_MAX_GUIDANCE_WEIGHT="${PAP_MOE_RTC_MAX_GUIDANCE_WEIGHT:-10.0}"
+export PAP_MOE_RTC_PREFIX_ATTENTION_SCHEDULE="${PAP_MOE_RTC_PREFIX_ATTENTION_SCHEDULE:-EXP}"
+export PAP_MOE_FIXED_NOISE_PER_REPLAN=false
+export PAP_MOE_EXPERT_MASK=1,1,1,1
+unset PAP_MOE_DEMO_RECOVERY_EPISODE
+export PAP_MOE_DEMO_RECOVERY_AFTER_CHUNKS=0
+unset PAP_MOE_ROLLOUT_RECOVERY_SESSION_DIR
+export PAP_MOE_LAUNCH_MOVEIT_FOR_RECOVERY=false
+export PAP_MOE_RECORD_VIDEO="${PAP_MOE_RECORD_VIDEO:-true}"
+
+exec "$WS_DIR/scripts/run_pap_moe_v9_gazebo_eval.sh" "${1:-false}" 13001

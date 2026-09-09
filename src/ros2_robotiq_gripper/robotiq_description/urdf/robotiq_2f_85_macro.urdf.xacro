@@ -107,14 +107,14 @@
                 <surface>
                     <friction>
                     <ode>
-                        <mu>100000.0</mu>
-                        <mu2>100000.0</mu2>
+                        <mu>0.8</mu>
+                        <mu2>0.8</mu2>
                     </ode>
                     </friction>
                     <contact>
                     <ode>
-                        <kp>1e5</kp>
-                        <kd>1</kd>
+                        <kp>5000</kp>
+                        <kd>20</kd>
                     </ode>
                     </contact>
                 </surface>
@@ -139,14 +139,14 @@
                 <surface>
                     <friction>
                     <ode>
-                        <mu>100000.0</mu>
-                        <mu2>100000.0</mu2>
+                        <mu>0.8</mu>
+                        <mu2>0.8</mu2>
                     </ode>
                     </friction>
                     <contact>
                     <ode>
-                        <kp>1e5</kp>
-                        <kd>1</kd>
+                        <kp>5000</kp>
+                        <kd>20</kd>
                     </ode>
                     </contact>
                 </surface>
@@ -200,27 +200,27 @@
                     <mesh filename="package://robotiq_description/meshes/visual/2f_85/left_finger_tip.dae" />
                 </geometry>
             </visual>
-            <collision>
+            <!-- Keep the detailed STL for rendering, but use one primitive
+                 rubber-pad collision for contact. Overlapping the STL and a
+                 pad created duplicate mesh contacts and solver overflow. -->
+            <collision name="left_rubber_pad_collision">
+                <!-- Match the full -6..51 mm axial extent of the original
+                     fingertip mesh. The shorter legacy box ended at 37.5 mm,
+                     so the peg was often squeezed by finger-body edges
+                     instead of the intended flat rubber pad. -->
+                <origin xyz="-0.0238 0 0.0225" rpy="0 0 0" />
                 <geometry>
-                    <mesh filename="package://robotiq_description/meshes/collision/2f_85/left_finger_tip.stl" />
+                    <box size="0.003 0.022 0.055" />
                 </geometry>
                 <surface>
-                    <friction>
-                    <ode>
-                        <mu>100000.0</mu>
-                        <mu2>100000.0</mu2>
-                    </ode>
-                    </friction>
-                    <contact>
-                    <ode>
-                        <kp>1e+5</kp>
-                        <kd>1</kd>
-                        <soft_cfm>0</soft_cfm>
-                        <soft_erp>0.2</soft_erp>
-                        <minDepth>0.002</minDepth>
-                        <maxVel>0</maxVel>
-                    </ode>
-                    </contact>
+                    <friction><ode>
+                        <mu>1.2</mu><mu2>1.2</mu2>
+                    </ode></friction>
+                    <contact><ode>
+                        <kp>2000</kp><kd>20</kd>
+                        <soft_cfm>0</soft_cfm><soft_erp>0.2</soft_erp>
+                        <minDepth>0.00005</minDepth><maxVel>0.05</maxVel>
+                    </ode></contact>
                 </surface>
             </collision>
             <inertial>
@@ -236,27 +236,20 @@
                     <mesh filename="package://robotiq_description/meshes/visual/2f_85/right_finger_tip.dae" />
                 </geometry>
             </visual>
-            <collision>
+            <collision name="right_rubber_pad_collision">
+                <origin xyz="0.0238 0 0.0225" rpy="0 0 0" />
                 <geometry>
-                    <mesh filename="package://robotiq_description/meshes/collision/2f_85/right_finger_tip.stl" />
+                    <box size="0.003 0.022 0.055" />
                 </geometry>
                 <surface>
-                    <friction>
-                    <ode>
-                        <mu>100000.0</mu>
-                        <mu2>100000.0</mu2>
-                    </ode>
-                    </friction>
-                    <contact>
-                    <ode>
-                        <kp>1e+5</kp>
-                        <kd>1</kd>
-                        <soft_cfm>0</soft_cfm>
-                        <soft_erp>0.2</soft_erp>
-                        <minDepth>0.002</minDepth>
-                        <maxVel>0</maxVel>
-                    </ode>
-                    </contact>
+                    <friction><ode>
+                        <mu>1.2</mu><mu2>1.2</mu2>
+                    </ode></friction>
+                    <contact><ode>
+                        <kp>2000</kp><kd>20</kd>
+                        <soft_cfm>0</soft_cfm><soft_erp>0.2</soft_erp>
+                        <minDepth>0.00005</minDepth><maxVel>0.05</maxVel>
+                    </ode></contact>
                 </surface>
             </collision>
             <inertial>

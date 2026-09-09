@@ -1,0 +1,11 @@
+{
+  "kind": "model inference, Gazebo, not scripted demonstration or hardware",
+  "checkpoint": "/home/ubuntu/ur3_ft300_ws/outputs/train/pap_interface_ab_20260909_B_continuous/checkpoints/010000/pretrained_model",
+  "episode": 1,
+  "seed": 1,
+  "outcome": "success",
+  "original_artifact": "artifacts/gazebo_pap_moe_workspace50_20260909_163606_ep0001_seed1",
+  "video_sha256": "7b96830d82826ff46f0e916dd0b45276d866dc099eab4e373f825ae00b5bfafb",
+  "edits": "none; thumbnail extracted at 5 seconds",
+  "release_stability_verified": false
+}

@@ -13,6 +13,7 @@
 
 import os
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -55,6 +56,8 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     gazebo_gui = LaunchConfiguration("gazebo_gui")
     world_file = LaunchConfiguration("world_file")
+    physics_engine = LaunchConfiguration("physics_engine")
+    sim_position_gain = LaunchConfiguration("sim_position_gain")
 
     # Gripper / FT options
     gripper_use_fake_hardware = LaunchConfiguration("gripper_use_fake_hardware")
@@ -100,6 +103,9 @@ def launch_setup(context, *args, **kwargs):
             " ",
             "sim_ignition:=false",
             " ",
+            "sim_position_gain:=",
+            sim_position_gain,
+            " ",
             "use_fake_hardware:=true",
             " ",
             "gripper_use_fake_hardware:=",
@@ -113,8 +119,39 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
 
+    # Validate the explicit Robotiq contact model and normalize stiffness for
+    # Fortress / DART.  Friction and penetration values now live directly in
+    # the xacro so the model source and generated robot_description agree.
+    robot_description_xml = robot_description_content.perform(context)
+
+    def replace_contact_value(text, old, new, expected_count):
+        count = text.count(old)
+        if count != expected_count:
+            raise RuntimeError(
+                f"Expected {expected_count} occurrences of {old!r} in "
+                f"robot_description, found {count}"
+            )
+        return text.replace(old, new)
+
+    for old, new, expected_count in (
+        ("<mu>0.8</mu>", "<mu>0.8</mu>", 2),
+        ("<mu2>0.8</mu2>", "<mu2>0.8</mu2>", 2),
+        ("<mu>1.2</mu>", "<mu>1.2</mu>", 2),
+        ("<mu2>1.2</mu2>", "<mu2>1.2</mu2>", 2),
+        ("<kp>5000</kp>", "<kp>5000</kp>", 2),
+        ("<kp>2000</kp>", "<kp>2000</kp>", 2),
+        ("<kd>20</kd>", "<kd>20</kd>", 4),
+        ("<minDepth>0.00005</minDepth>", "<minDepth>0.00005</minDepth>", 4),
+        ("<maxVel>0.05</maxVel>", "<maxVel>0.05</maxVel>", 2),
+    ):
+        robot_description_xml = replace_contact_value(
+            robot_description_xml, old, new, expected_count
+        )
+
     robot_description = {
-        "robot_description": ParameterValue(robot_description_content, value_type=str)
+        "robot_description": ParameterValue(
+            robot_description_xml, value_type=str
+        )
     }
 
     # Robot state publisher
@@ -143,7 +180,14 @@ def launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource(
             [FindPackageShare("ros_gz_sim"), "/launch/gz_sim.launch.py"]
         ),
-        launch_arguments={"gz_args": [" -r -v 2 ", world_file]}.items(),
+        launch_arguments={
+            "gz_args": [
+                " -r -v 1 --physics-engine ",
+                physics_engine,
+                " ",
+                world_file,
+            ]
+        }.items(),
         condition=IfCondition(gazebo_gui),
     )
 
@@ -151,7 +195,14 @@ def launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource(
             [FindPackageShare("ros_gz_sim"), "/launch/gz_sim.launch.py"]
         ),
-        launch_arguments={"gz_args": [" -s -v 2 ", world_file]}.items(),
+        launch_arguments={
+            "gz_args": [
+                " -r -s -v 1 --physics-engine ",
+                physics_engine,
+                " ",
+                world_file,
+            ]
+        }.items(),
         condition=UnlessCondition(gazebo_gui),
     )
 
@@ -164,7 +215,7 @@ def launch_setup(context, *args, **kwargs):
             "-world",
             "simulation_world",
             "-string",
-            robot_description_content,
+            robot_description_xml,
             "-name",
             "ur3_ft300_robotiq",
             "-allow_renaming",
@@ -178,6 +229,10 @@ def launch_setup(context, *args, **kwargs):
         executable="parameter_bridge",
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
+            "/pap_moe/peg_body_contacts@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts",
+            "/pap_moe/peg_handle_contacts@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts",
+            "/pap_moe/hole_side_contacts@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts",
+            "/pap_moe/hole_floor_contacts@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts",
         ],
         output="screen",
     )
@@ -281,15 +336,34 @@ def launch_setup(context, *args, **kwargs):
             name="GAZEBO_ROS2_CONTROL_USE_PARAM_SERVER",
             value="true",
         ),
+        # Suppress Gazebo warning logs (DetachableJoint missing child model warning)
+        SetEnvironmentVariable(
+            name="IGN_VERBOSE",
+            value="0",
+        ),
+        SetEnvironmentVariable(
+            name="GZ_VERBOSE",
+            value="0",
+        ),
         # Force NVIDIA GPU for Gazebo rendering (RTX 5080)
         SetEnvironmentVariable(
             name="__EGL_VENDOR_LIBRARY_FILENAMES",
             value="/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
         ),
-        # Gazebo model path for pick-and-place objects
+        # Prefer the versioned/generated fixture meshes installed with this
+        # package.  The user model cache may contain an older socket geometry.
         SetEnvironmentVariable(
             name="IGN_GAZEBO_RESOURCE_PATH",
-            value=os.path.expanduser("~/.gazebo/models"),
+            value=os.pathsep.join(
+                [
+                    os.path.join(
+                        get_package_share_directory("ur_simulation_gz"),
+                        "models",
+                    ),
+                    os.path.expanduser("~/.gazebo/models"),
+                    os.environ.get("IGN_GAZEBO_RESOURCE_PATH", ""),
+                ]
+            ),
         ),
         robot_state_publisher_node,
         gz_launch_description_with_gui,
@@ -444,6 +518,25 @@ def generate_launch_description():
                 "simulation_world.sdf",
             ]),
             description="Gazebo world file path.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "physics_engine",
+            default_value="ignition-physics-dartsim-plugin",
+            description=(
+                "Ignition Physics engine plugin. Use "
+                "ignition-physics-bullet-plugin for the contact comparison."
+            ),
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "sim_position_gain",
+                default_value="0.5",
+            description=(
+                "Global gz_ros2_control position-error to joint-velocity gain."
+            ),
         )
     )
 

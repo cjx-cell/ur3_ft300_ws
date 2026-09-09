@@ -109,7 +109,7 @@ class UR3Pi0Inference:
         t0 = time.time()
 
         # ── 加载 normalizer stats ──
-        self.state_mean, self.state_std, self.action_mean, self.action_std = load_normalizer_stats(CKPT_DIR)
+        self.state_mean, self.state_std, self.action_mean, self.action_std = load_normalizer_stats(md)
 
         # ── Config ──
         with open(md / "config.json") as f:
