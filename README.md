@@ -8,21 +8,21 @@
 
 ### 采集数据样本
 
-[![多模态轨迹数据可视化](docs/assets/workspace50_sample_preview.jpg)](docs/assets/workspace50_sample_0001.mp4)
+[![多模态轨迹数据可视化](docs/assets/workspace50_sample.gif)](docs/assets/workspace50_sample_0001.mp4)
 
 [播放 / 下载数据样本视频](docs/assets/workspace50_sample_0001.mp4)
 
-使用项目的 `pap_moe_peg_in_hole_make_video.py`，从 Workspace50 的 **0001 号成功示范**生成。视频展示腕部与全局图像、机械臂关节、夹爪、FT300 信号和四专家软路由标签，按数据的 **10 Hz** 播放。这是采集数据可视化，不是模型推理。
+采集数据可视化：双相机图像、关节与夹爪状态、FT300 信号及物理专家软路由标签。
 
 ### PAP-MoE 闭环推理
 
-[![PAP-MoE 抓取、运输与插入](docs/assets/pap_moe_success_preview.jpg)](docs/assets/pap_moe_success.mp4)
+[![PAP-MoE 抓取、运输与插入](docs/assets/pap_moe_success.gif)](docs/assets/pap_moe_success.mp4)
 
 [播放 / 下载模型推理视频](docs/assets/pap_moe_success.mp4)
 
-PAP-MoE 在 Gazebo 中完成 peg 抓取、运输与轴孔插入，使用 **PhysicsGate 在线预测路由、50 步预测 / 10 步执行及 RTC**，无人工或示教专家接管。展示案例为场景 **0031 / seed2**，原始录像约 26 秒，按本项目插入判据成功。
+PAP-MoE 仿真闭环推理：自主完成抓取、运输与轴孔插入，无人工接管。
 
-以上均为仿真演示。单条成功案例不代表总体成功率或释放稳定性；视频来源、检查点与校验值见 [演示清单](docs/assets/demo_manifest.json)，批量结果与判定口径见 [实验报告](docs/reports/PAP_MoE推进顺序与实验结论_简版_20260907.md)。
+动图自动循环展示，完整画质录像见 MP4 链接。
 
 ## 主要功能
 
@@ -58,7 +58,7 @@ PAP-MoE 使用四个物理感知专家提取不同工况下的信息，由 Physi
                  新观测 + RTC剩余动作
 ```
 
-当前方案不使用 subtask、skill-progress 或独立夹爪决策头。四专家提供特征，最终机械臂与夹爪动作由动作专家生成。物理专家的专项收益仍在验证，详见 [当前研究状态](docs/PAP_MOE新对话接手指南.md)。
+四专家提供物理感知特征，最终机械臂与夹爪动作由动作专家统一生成。
 
 ## 环境准备
 
@@ -168,7 +168,7 @@ python pap_moe_framework/scripts/pap_moe_peg_in_hole_make_video.py \
 | Diffusion Policy | `scripts/run_workspace50_corrected_diffusion.sh` |
 | PAP-MoE | `scripts/run_pap_moe_vnext_stage_train.sh`、`scripts/train_pap_checked.py` |
 
-PAP-MoE 按真实路由下专家/动作联合训练、PhysicsGate监督训练、Gate端到端适配分阶段推进。不同研究检查点的配置和冻结范围须与其训练合同对应，详见 [脚本导航](scripts/README.md) 和 [接手文档](docs/PAP_MOE新对话接手指南.md)。
+PAP-MoE 按真实路由下专家/动作联合训练、PhysicsGate 监督训练、Gate 端到端适配分阶段训练。各阶段的配置和冻结范围应与所用检查点匹配，入口说明见 [脚本导航](scripts/README.md)。
 
 ### 5. Gazebo 推理与评估
 
@@ -188,11 +188,9 @@ bash scripts/run_workspace50_lerobot_policy_gazebo.sh pap_moe "$CHECKPOINT" 1 tr
 | `pap_moe_framework/` | 采集、数据转换、统计、物理先验、恢复协议和测试 |
 | `learning/` | LeRobot上游锁定、PAP源码增量及回归测试 |
 | `scripts/` | 训练、推理、评估和诊断入口 |
-| `docs/` | 使用说明、架构/实验记录、演示与接手文档 |
+| `docs/` | 使用说明、架构文档与演示资源 |
 
 - [详细运行说明](docs/RUNNING.md)
-- [当前任务与研究状态](docs/PAP_MOE新对话接手指南.md)
-- [实验结果与分析](docs/reports/PAP_MoE推进顺序与实验结论_简版_20260907.md)
 - [来源、贡献与许可证](docs/CONTRIBUTIONS.md)
 
-项目沿用 LeRobot/OpenPI、ROS 2、MoveIt 2、Universal Robots、Robotiq及RealSense等开源组件；各组件保留原有许可证。旧 SA-MoE 已退役，历史说明见 [LEGACY_SA_MOE.md](docs/LEGACY_SA_MOE.md)。
+项目沿用 LeRobot/OpenPI、ROS 2、MoveIt 2、Universal Robots、Robotiq 及 RealSense 等开源组件；各组件保留原有许可证。
