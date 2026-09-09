@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/f0b8adde-8b4e-4449-8877-8ed4f3a32d54
 
 ### PAP-MoE 闭环推理
 
-https://github.com/user-attachments/assets/14e1a368-4401-42cd-972a-7f089aaf1268
+https://github.com/user-attachments/assets/68625ffe-d2c3-41a2-960a-6e0be081b7f4
 
 [播放 / 下载模型推理视频](docs/assets/pap_moe_success.mp4)
 

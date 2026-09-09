@@ -17,7 +17,7 @@
   "model_rollout": {
     "kind": "PAP-MoE model inference in Gazebo, not scripted demonstration or hardware",
     "video": "pap_moe_success.mp4",
-    "github_attachment": "https://github.com/user-attachments/assets/14e1a368-4401-42cd-972a-7f089aaf1268",
+    "github_attachment": "https://github.com/user-attachments/assets/68625ffe-d2c3-41a2-960a-6e0be081b7f4",
     "checkpoint": "outputs/train/pap_corrected_gate_calibration_20260907_104300/checkpoints/015000/pretrained_model",
     "routing": "Online predicted PhysicsGate",
     "prediction_steps": 50,
@@ -27,8 +27,9 @@
     "seed": 2,
     "outcome": "success",
     "original_artifact": "artifacts/gazebo_pap_moe_workspace50_20260908_195140_ep0031_seed2",
-    "video_sha256": "d4f5abac67e04d2bf492b74b824256a067c1d2919f669bf36a7326f4c0295ddb",
-    "edits": "User-selected original recording copied unchanged; preview extracted at 20 seconds",
+    "source_video_sha256": "d4f5abac67e04d2bf492b74b824256a067c1d2919f669bf36a7326f4c0295ddb",
+    "video_sha256": "4af257fbbd2a4edbc1dbb49b3d17df7500ee78bbd852877361d3f0096a01dbc1",
+    "edits": "User-selected original transcoded from mp4v to H.264/yuv420p with faststart; all 309 frames and 30.9 seconds retained; preview extracted at 20 seconds",
     "animated_preview": "pap_moe_success.gif; full duration, 8 fps, 468 px wide, 96-color palette; no timeline speed change",
     "release_stability_verified": false,
     "scope": "Selected successful insertion example; not an aggregate success-rate claim"
