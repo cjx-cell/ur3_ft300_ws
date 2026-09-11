@@ -12,13 +12,14 @@
 | 学习基础设施 | [LeRobot](https://github.com/huggingface/lerobot) | 数据字段/统计审计、采样与优化器分组扩展、PAP 策略注册、训练/推理合同适配 |
 | VLA / 基线 | [OpenPI](https://github.com/Physical-Intelligence/openpi) 与 LeRobot 的 Pi0.5、ACT、Diffusion Policy | 使用其实现和预训练能力；本项目开发物理专家、条件接口和验证流程，不宣称发明基础模型 |
 
-## 可展示的项目增量
+## 本项目新增模块
 
 - `pap_moe_framework/scripts/pap_moe_peg_in_hole_record.py`、转换/统计/路由工具：多模态样本与可追溯数据合同。
 - `src/ur_simulation_gz/ur_simulation_gz/scripts/pap_moe_*`：键鼠界面、运动映射和状态诊断。
 - `scripts/resident_policy/`、`scripts/deployment_validation_20260909/`：会话隔离、数值回放、控制器/夹爪/释放检查。
 - `learning/lerobot_overlay/src/lerobot/policies/pap_moe/`：PAP 模型、PhysicsGate、四专家与训练接口；详细来源由 manifest 标记。
 
+以上用于区分本项目新增模块与上游组件。修改上游文件时保留其版权和许可证信息，并在发布增量中记录来源与版本。
 
 ## 许可证
 

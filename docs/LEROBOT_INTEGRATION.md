@@ -19,6 +19,7 @@ python3 scripts/prepare_learning_source.py --destination /path/to/new/lerobot-pa
 python -m pip install -e /path/to/new/lerobot-pap
 ```
 
+这种组织方式将项目增量与上游代码清晰分离，但尚未完成独立插件化或新机器端到端复现。所有带本机绝对路径的旧实验入口须按 RUNNING.md 配置；增量源码不包含私有数据或检查点。
 
 ## 真正插件化的后续工作
 
